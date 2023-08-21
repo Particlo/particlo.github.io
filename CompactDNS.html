@@ -1,0 +1,1772 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>pre{font-family:Consolas,monospace;}</style>
+<title>CompactDNS</title>
+<meta charset="UTF-8">
+<meta name="description" content="learn TLS fast">
+<link rel="icon" type="image/jpg" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=">
+</head>
+<body style="background:rgb(44,44,44); line-height:100%; color: white;font-family:Consolas,monospace;">
+<pre>
+Domain Name System
+
+based on RFC1034
+         RFC1035
+
+CommonConfigurations
+    ------------------------------------------------------------------
+    |               LocalHost                         |  Foreign     |
+    |                                                 |              |
+    |  +---------+               +----------+         |  +--------+  |
+    |  |         | user queries  |          |queries  |  |        |  |
+    |  |  User   |-------------->|          |---------|->|        |  |
+    |  | Program |               | Resolver |         |  |  Name  |  |
+    |  |         |<--------------|          |<--------|--| Server |  |
+    |  |         | user responses|          |responses|  |        |  |
+    |  +---------+               +----------+         |  +--------+  |
+    |                              |     A            |              |
+    |              cache additions |     | references |              |
+    |                              V     |            |              |
+    |                            +----------+         |              |
+    |                            |  Cache   |         |              |
+    |                            +----------+         |              |
+    ------------------------------------------------------------------
+    UserProgram  queries and responses format is specific to LocalHost and OS
+    LocalHost    implements Resolver as a subroutine to be linked in with every program that needs its services
+    NameServer   either a stand alone program on dedicated machine
+                          process or processes on large timeshared Host
+
+    ------------------------------------------------------------------
+    |               Local Host                        |  Foreign     |
+    |                                                 |              |
+    |  +---------+               +----------+         |  +--------+  |
+    |  |         |               |          |responses|  |        |  |
+    |  |         |               |   Name   |---------|->|        |  |
+    |  |  Master |-------------->|  Server  |         |  |Resolver|  |
+    |  |  Files  |               |          |<--------|--|        |  |
+    |  |         |               |          | queries |  +--------+  |
+    |  +---------+               +----------+         |              |
+    ------------------------------------------------------------------
+
+    ------------------------------------------------------------------
+    |               Local Host                        |  Foreign     |
+    |                                                 |              |
+    |  +---------+               +----------+         |  +--------+  |
+    |  |         |               |          |responses|  |        |  |
+    |  |         |               |   Name   |---------|->|        |  |
+    |  |  Master |-------------->|  Server  |         |  |Resolver|  |
+    |  |  Files  |               |          |<--------|--|        |  |
+    |  |         |               |          | queries |  +--------+  |
+    |  +---------+               +----------+         |              |
+    |                              A     |maintenance |  +--------+  |
+    |                              |     +------------|->|        |  |
+    |                              |      queries     |  |  Name  |  |
+    |                              |                  |  | Server |  |
+    |                              +------------------|--|        |  |
+    |                           maintenance responses |  +--------+  |
+    ------------------------------------------------------------------
+    NameServer makes connection periodically
+                                to foreign NameServer
+                                using VirtualCircuit
+                                checks current copy of zone has not changed
+                                gets copy of zone using ZoneTransfer
+
+    -----------------------------------------------------------------|
+    |               Local Host                        |  Foreign     |
+    |                                                 |              |
+    |  +---------+               +----------+         |  +--------+  |
+    |  |         | user queries  |          |queries  |  |        |  |
+    |  |  User   |-------------->|          |---------|->|        |  |
+    |  | Program |               | Resolver |         |  |  Name  |  |
+    |  |         |<--------------|          |<--------|--| Server |  |
+    |  |         | user responses|          |responses|  |        |  |
+    |  +---------+               +----------+         |  +--------+  |
+    |                              |     A            |              |
+    |              cache additions |     | references |              |
+    |                              V     |            |              |
+    |                            +----------+         |              |
+    |                            |  Shared  |         |              |
+    |                            | Database |         |              |
+    |                            +----------+         |              |
+    |                              A     |            |              |
+    |                    refreshes |     | references |              |
+    |                              |     V            |              |
+    |  +---------+               +----------+         |  +--------+  |
+    |  |         |               |          |responses|  |        |  |
+    |  |         |               |   Name   |---------|->|        |  |
+    |  |  Master |-------------->|  Server  |         |  |Resolver|  |
+    |  |  Files  |               |          |<--------|--|        |  |
+    |  |         |               |          | queries |  +--------+  |
+    |  +---------+               +----------+         |              |
+    |                              A     |maintenance |  +--------+  |
+    |                              |     +------------|->|        |  |
+    |                              |      queries     |  |  Name  |  |
+    |                              |                  |  | Server |  |
+    |                              +------------------|--|        |  |
+    |                           maintenance responses |  +--------+  |
+    ------------------------------------------------------------------
+    SharedDatabase  has part of DomainNameSpace tree
+                        authoritative data maintained by periodic refresh operations of NameServer
+                        cached        data from Resolver requests
+                    format is up to the implementor
+
+    ------------------------------------------------------------------
+    |                 Local Hosts                     |  Foreign     |
+    |                                                 |              |
+    |  +---------+                                    |              |
+    |  |         | responses                          |              |
+    |  | Stub    |<--------------------+              |              |
+    |  | Resolver|                     |              |              |
+    |  |         |----------------+    |              |              |
+    |  +---------+ recursive      |    |              |              |
+    |              queries        |    |              |              |
+    |                             V    |              |              |
+    |  +---------+ recursive     +----------+         |  +--------+  |
+    |  |         | queries       |          |queries  |  |        |  |
+    |  | Stub    |-------------->| Recursive|---------|->|        |  |
+    |  | Resolver|               | Server   |         |  |  Name  |  |
+    |  |         |<--------------|          |<--------|--| Server |  |
+    |  +---------+ responses     |          |responses|  |        |  |
+    |                            +----------+         |  +--------+  |
+    |                            |  Central |         |              |
+    |                            |   Cache  |         |              |
+    |                            +----------+         |              |
+    ------------------------------------------------------------------
+    group of Hosts may offload other Hosts that do not implement full Resolver
+                       replace Resolvers with StubResolvers
+                       share small number of caches while CentralCache has higher hit ratio
+
+UserProgram  ask Resolver about DomainName
+                 using Query
+
+Resolver    responds to Query of UserProgram
+                     after reading cache data or
+                           asking NameServer
+            knows at least one NameServer
+            discovers NameServers after receiving Response from NameServer referring to other NameServer
+
+NameServer  responds to Query of Resolver
+                     using either zone   data
+                                  cached data
+
+            zone data    has a part of DomainNameSpace tree
+                         is authoritative
+                         updated by NameServer
+                                 using MasterFile stored locally
+                                                         in another NameServer
+            cached data  improves performance of data retrieval process
+                         acquired by local Resolver
+                         may be incomplete
+                         periodically discarded using timeout mechanism
+
+            if is unable to load    zone data from MasterFile due to errors or
+                            refresh zone data using expiration parameter
+               then NameServer should respond as if it did not possess that zone data
+
+DomainNameSpace  a tree data structure
+                        nodes are &lt;label> of DomainNames
+                 different parts of tree are stored in different NameServers
+                 example  --------------------------------------------------------------
+                          |                                                            |
+                          |                              |                             |
+                          |        +---------------------+------------------+          |
+                          |        |                     |                  |          |
+                          |       MIL                   EDU                ARPA        |
+                          |        |                     |                  |          |
+                          |        |                     |                  |          |
+                          |  +-----+-----+               |     +------+-----+-----+    |
+                          |  |     |     |               |     |      |           |    |
+                          | BRL  NOSC  DARPA             |  IN-ADDR  SRI-NIC     ACC   |
+                          |                              |                             |
+                          |  +--------+------------------+---------------+--------+    |
+                          |  |        |                  |               |        |    |
+                          | UCI      MIT                 |              UDEL     YALE  |
+                          |           |                 ISI                            |
+                          |           |                  |                             |
+                          |       +---+---+              |                             |
+                          |       |       |              |                             |
+                          |      LCS  ACHILLES  +--+-----+-----+--------+              |
+                          |       |             |  |     |     |        |              |
+                          |       XX            A  C   VAXA  VENERA Mockapetris        |
+                          |                                                            |
+                          --------------------------------------------------------------
+                          the top &lt;label> is Root
+                                          is empty
+                          one DomainName inside is LCS.MIT.EDU.
+
+DomainName  syntax  &lt;domain>      ::= &lt;subdomain> | " "
+                    &lt;subdomain>   ::= &lt;label> | &lt;subdomain> "." &lt;label>
+                    &lt;label>       ::= &lt;letter> [ [ &lt;ldh-str> ] &lt;let-dig> ]
+                    &lt;ldh-str>     ::= &lt;let-dig-hyp> | &lt;let-dig-hyp> &lt;ldh-str>
+                    &lt;let-dig-hyp> ::= &lt;let-dig> | "-"
+                    &lt;let-dig>     ::= &lt;letter> | &lt;digit>
+                    &lt;letter>      ::= any character A to Z and a to z
+                    &lt;digit>       ::= any digit 0 to 9
+
+                    rules are not obligatory
+                    use to avoid problems if old software is converted to use DomainName
+
+                    two &lt;domain> with same spelling but different case are treated identical
+                    &lt;label> follows rules for ARPANET HostName
+                            length < 64 characters
+                            starts   with letter
+                            interior with letters
+                                          digits
+                                          hyphen
+                            ends     with letter
+                                          digit
+                            future additions may use more characters
+                                                     binary octets
+
+                    examples for Hosts in Internet
+                             A.ISI.EDU
+                             XX.LCS.MIT.EDU
+                             SRI-NIC.ARPA
+
+            avoid storing in 7-bit ASCII
+                          using special bytes to terminate labels
+            original case should be preserved on databases
+            if x.y and X.Y need to be stored
+               then only one casing is stored
+            data for a.x and B.X is not stored under A.x, A.X, b.x, b.X
+            preserve case of first label of DomainName
+
+HostName  name of computer inside network
+
+          if  HostName   is myComputer4                      and
+              DomainName is ISI.EDU                          and
+              ISI.EDU     refers to the Gateway of a network and
+              myComputer4 refers to my computer inside that network
+              then myComputer4.ISI.EDU could be the DomainName of my computer
+
+          if creating HostName then follow rules of HOSTS.TXT
+
+Gateway  a device on a network
+         sends local network traffic to other networks
+
+BitDiagrams  data order of transmission is the order read in English
+             left most bit is most significant bit
+
+             example   0                   1
+                       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+                      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+                      |       1       |       2       |
+                      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+                      |       3       |       4       |
+                      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+                      |       5       |       6       |
+                      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+             example  representing value 170 in decimal
+                       0 1 2 3 4 5 6 7
+                      +-+-+-+-+-+-+-+-+
+                      |1 0 1 0 1 0 1 0|
+                      +-+-+-+-+-+-+-+-+
+
+Message  +---------------------+
+         |        Header       |
+         +---------------------+
+         |       Question      | the question for NameServer
+         +---------------------+
+         |        Answer       | RRs answering the question
+         +---------------------+
+         |      Authority      | RRs pointing toward an authority
+         +---------------------+
+         |      Additional     | RRs holding additional information
+         +---------------------+
+
+         Header  is always present
+                                                 1  1  1  1  1  1
+                   0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |                      ID                       |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |QR|   Opcode  |AA|TC|RD|RA|   Z    |   RCODE   |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |                    QDCOUNT                    |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |                    ANCOUNT                    |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |                    NSCOUNT                    |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |                    ARCOUNT                    |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                 ID       identifier
+                          assigned by creator of Query
+                          is copied into Response
+
+                 QR       0 = this Message is Query
+                          1 = this Message is Response
+
+                 OPCODE   assigned by creator of Query
+                          is copied into Response
+                          0    = this Message is a Query               QUERY
+                          1    = this Message is a InverseQuery        IQUERY
+                          2    = this Message is server status request STATUS
+                          3-15 = reserved for future use
+
+                 AA       Authoritative Answer
+                          valid in Response
+                          1 = responding NameServer is authority for DomainName in Question
+                          authority for DomainName which matches Query       DomainName in Answer
+                                                                 first owner DomainName in Answer
+
+                 TC       Truncation
+                          1 = this Message length was greater than permitted on transmission channel
+                                                      truncated
+                          if truncating Response
+                             then truncation should start at the end of Response and work forward in datagram
+                                  if Authority has RR
+                                     then Answer RR are unique
+
+                 RD       Recursion Desired
+                          is copied into Response
+                          recursive Query support is optional
+                          1 = may make NameServer receiving this Query
+                                                  pursue this Query recursively
+                          0 = makes NameServer receiving this Query
+                                               not pursue this Query recursively
+
+                 RA       Recursion Available
+                          set or cleared in Response
+                                         by NameServer
+                          1 = NameServer supports recursive Query
+
+                 Z        Reserved for future use
+                          = 0 in all Query and Response
+
+                 RCODE    Response code
+                          set in Response
+                          0     = no error condition
+                          1     = format error
+                                  NameServer was unable to interpret Query
+                          2     = Server failure
+                                  NameServer was unable to process Query due to problem with the server
+                          3     = Name Error (NE)
+                                  DomainMame in Query does not exist
+                                  meaningful only for responses from authoritative NameServer
+                          4     = Not Implemented
+                                  NameServer does not support requested kind of Query
+                          5     = Refused
+                                  NameServer refuses to perform operation for policy reasons
+                                  example NameServer refuses to provide information to requester
+                                                                perform operation for particular data
+                                                                perform zone transfer
+                          6-15  = Reserved for future use
+
+                 QDCOUNT  unsigned integer
+                          number of Entrie         in Question
+                 ANCOUNT  unsigned integer
+                          number of RR             in Answer
+                 NSCOUNT  unsigned integer
+                          number of NameServer RR  in Authority
+                 ARCOUNT  unsigned integer
+                          number of RR             in Additional
+
+         Question  sequence of Entrie
+                   Entrie                                  1  1  1  1  1  1
+                             0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+                           +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                           |                                               |
+                           /                     QNAME                     /
+                           /                                               /
+                           +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                           |                     QTYPE                     |
+                           +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                           |                     QCLASS                    |
+                           +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                           QNAME   &lt;domain-name>
+                                   has no padding
+
+                           QTYPE   type of Query
+                                   all TYPEs are valid QTYPEs
+                                   values  252  AXFR   request for transfer of an entire zone
+                                           253  MAILB  request for mailbox related records (MB, MG or MR)
+                                           254  MAILA  request for mail agent RRs (Obsolete - see MX)
+                                           255  *      request for all records
+                                   length = 2 octet
+
+                           QCLASS  class of Query
+                                   every CLASS is a valid QCLASS
+                                   values  255  *  any class
+                                   length = 2 octet
+                                   if receive QCLASS=* or other QCLASS that matches multiple classes and
+                                      server can't guarantee Response covers all those classes
+                                      then Response should not be authoritative
+
+
+         Answer     sequence of RR answering Question
+         Authority  sequence of RR pointing toward authoritative NameServer
+         Additional sequence of RR which relate to Query
+                                         are not answers to Question
+                    if composing Response and
+                       RRs in Additional are duplicates of RRs in Answer or Authority
+                       then those duplicate RRs may be omitted
+
+RR  Resource Record
+                                    1  1  1  1  1  1
+      0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                                               |
+    /                                               /
+    /                      NAME                     /
+    |                                               |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                      TYPE                     |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                     CLASS                     |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                      TTL                      |
+    |                                               |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    |                   RDLENGTH                    |
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--|
+    /                     RDATA                     /
+    /                                               /
+    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    NAME      name of node to which this RR pertains
+
+    TYPE      are a subset of QTYPEs
+              values  1   A      HostAddress
+                      2   NS     authoritative NameServer
+                      3   MD     mail destination  (Obsolete, use MX)
+                      4   MF     mail forwarder    (Obsolete, use MX)
+                      5   CNAME  canonical name for an alias
+                      6   SOA    marks the start of a zone of authority
+                      7   MB     mailbox DomainName      (EXPERIMENTAL)
+                      8   MG     mail group member       (EXPERIMENTAL)
+                      9   MR     mail rename DomainName  (EXPERIMENTAL)
+                      10  NULL   null RR                 (EXPERIMENTAL)
+                      11  WKS    well known service description
+                      12  PTR    DomainName pointer
+                      13  HINFO  Host information
+                      14  MINFO  mailbox or mail list information
+                      15  MX     mail exchange
+                      16  TXT    text strings
+              length = 2 octets
+
+    CLASS     values  1  IN  the Internet
+                      2  CS  the CSNET class (Obsolete)
+                      3  CH  the CHAOS class
+                      4  HS  Hesiod [Dyer 87]
+              length = 2 octets
+              may not indicate protocol family used to communicate with Host
+              example  Hosts that are NameServers for IN or HS
+                             may be queried using IN protocols
+
+    TTL       seconds this RR may be cached before source information is consulted again
+              unsigned integer
+              < 2^31
+              = 0 if TYPE = SOA
+              length = 32 bit
+              if = 0 then this RR should not be cached
+                                  used for transaction in progress
+                                           extremely volatile data
+              if RR is sent in Response
+                 then TTL of RR in zone data
+                          is set to maximum between TTL     of that RR
+                                                    MINIMUM of that RR
+
+    RDLENGTH  octet length of RDATA
+              unsigned integer
+              length = 16bit
+
+    RDATA     string describing resource
+              format depends on TYPE and CLASS
+              example if TYPE=A and CLASS=IN
+                         then RDATA has 4 octet ARPA InternetAddress
+              DomainNames may be compressed
+
+              CNAME  Standard RR
+                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                     /                     CNAME                     /
+                     /                                               /
+                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                     &lt;domain-name>
+                     canonical or primary name for owner
+                     owner name is an alias
+                     causes no additional section processing
+                     NameServer may restart Query at the canonical name
+                     more details in RFC1034 NameServer logic
+
+              HINFO  Standard RR
+                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                     /                      CPU                      /
+                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                     /                       OS                      /
+                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                     CPU  &lt;character-string>
+                          central processing unit type
+                          standard values in RFC1010
+                     OS   &lt;character-string>
+                          operating system type
+                          standard values in RFC1010
+                     used to acquire general information about Host
+                          by FTP if talking between machines or operating systems of same type
+
+              MB  Standard RR
+                  (EXPERIMENTAL)  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  /                   MADNAME                     /
+                                  /                                               /
+                                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  MADNAME  &lt;domain-name> of Host that has mailbox
+                                  causes lookup for A type RRs corresponding to MADNAME
+
+                  (Obsolete)      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  /                   MADNAME                     /
+                                  /                                               /
+                                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  MADNAME  &lt;domain-name> of Host that has mail agent that delivers mail for domain
+                                  causes lookup for A type RRs corresponding to MADNAME
+                                  more details in MX and RFC974
+                                  if found in MasterFiles
+                                     then should reject MB
+                                                 convert to MX 0
+
+              MF  Standard RR
+                  (Obsolete)  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                              /                   MADNAME                     /
+                              /                                               /
+                              +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                              MADNAME  &lt;domain-name> of Host that has mail agent that forwards mail to domain
+                              causes lookup for A type record corresponding to MADNAME
+                              more details in MX and RFC974
+                              if found in MasterFiles
+                                 then should reject MB
+                                             convert to MX 10
+
+              MG  Standard RR
+                  (EXPERIMENTAL)  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  /                   MGMNAME                     /
+                                  /                                               /
+                                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  MGMNAME  &lt;domain-name> of mailbox
+                                           member of mail group of this DomainName
+                  causes no additional section processing
+
+              MINFO  Standard RR
+                     (EXPERIMENTAL)  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                     /                    RMAILBX                    /
+                                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                     /                    EMAILBX                    /
+                                     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                                     RMAILBX  &lt;domain-name> of mailbox
+                                              person responsible for mailing list or mailbox
+                                              used for requests to be added to a mail group
+                                              if RMAILBX = Root then owner of MINFO is responsible for itself
+
+                                     EMAILBX  &lt;domain-name> of mailbox
+                                              receives error messages of mailing list or mailbox
+                                              specified by owner of MINFO
+                                              if EMAILBX = Root then errors should be returned to sender
+
+                     causes no additional section processing
+                     may be associated with simple mailbox
+                            used with mailing list
+
+              MR  Standard RR
+                  (EXPERIMENTAL)  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                  /                   NEWNAME                     /
+                                  /                                               /
+                                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                                  NEWNAME  &lt;domain-name>
+                                           has new name of mailbox
+
+                  causes no additional section processing
+                  use for forwarding entry for user who has moved to different mailbox
+
+              MX  Standard RR
+                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                  |                  PREFERENCE                   |
+                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                  /                   EXCHANGE                    /
+                  /                                               /
+                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                  PREFERENCE  16bit integer
+                              preference given to this RR among others at the same owner
+                              lower values are preferred
+                  EXCHANGE    &lt;domain-name> of Host acting as mail exchange for the owner name
+
+                  causes type A additional section processing for the Host specified by EXCHANGE
+                  more detail in RFC974
+
+              NULL  Standard RR
+                    (EXPERIMENTAL)  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                    /                  &lt;anything>                   /
+                                    /                                               /
+                                    +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                    has any data
+                                    length < 65536 octets
+
+                    causes no additional section processing
+                    not allowed in MasterFiles
+                    used as placeholders in experimental extensions of DNS
+
+              NS  Standard RR
+                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                  /                   NSDNAME                     /
+                  /                                               /
+                  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                  NSDNAME  &lt;domain-name> of Host that should be authoritative for this RR CLASS and domain
+                                                             have zone starting at owner name of this RR CLASS
+
+                  causes additional section processing to search type A record
+                  if used in referral
+                     then causes search of zone in which they reside for glue information
+
+              PTR  Standard RR
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   /                   PTRDNAME                    /
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   PTRDNAME  &lt;domain-name>
+                             points to location in DomainNameSpace
+
+                   causes no additional section processing
+                   don't imply any special processing similar to that performed by CNAME
+
+              SOA  Standard RR
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   /                     MNAME                     /
+                   /                                               /
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   /                     RNAME                     /
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |                    SERIAL                     |
+                   |                                               |
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |                    REFRESH                    |
+                   |                                               |
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |                     RETRY                     |
+                   |                                               |
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |                    EXPIRE                     |
+                   |                                               |
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |                    MINIMUM                    |
+                   |                                               |
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                   MNAME    &lt;domain-name> of NameServer
+                            original or primary source of data for this zone
+
+                   RNAME    &lt;domain-name> of mailbox
+                            person responsible for this zone
+
+                   SERIAL   unsigned integer
+                            version number of original copy of zone
+                            value wraps
+                            is preserved in zone transfers
+                            should be compared using sequence space arithmetic
+                            length = 32bit
+
+                   REFRESH  seconds before zone should be refreshed
+                            length = 32bit
+
+                   RETRY    seconds before failed refresh should be retried
+                            length = 32bit
+
+                   EXPIRE   seconds upper limit before zone is no longer authoritative
+                            length = 32bit
+
+                   MINIMUM  unsigned integer
+                            minimum TTL that should be exported with any RR from this zone
+                            used in all Query operations that retrieve RRs from zone
+                            length = 32bit
+
+                   causes no additional section processing
+
+              TXT  Standard RR
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   /                   TXT-DATA                    /
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   TXT-DATA  one or more &lt;character-string>
+                   used to hold descriptive text
+                   semantics depends on domain
+
+              A  specific for Internet
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 |                    ADDRESS                    |
+                 +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                 ADDRESS  InternetAddress
+                          length = 32bit
+                 Hosts with multiple InternetAddress have multiple A records
+                 causes no additional section processing
+                 RDATA of A line in MasterFile is an InternetAddress
+                 InternetAddress  four decimal numbers separated by dots without any imbedded spaces
+                                  example  10.2.0.52
+                                           192.0.5.6
+
+              WKS  specific for Internet
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |                    ADDRESS                    |
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   |       PROTOCOL        |                       |
+                   +--+--+--+--+--+--+--+--+                       |
+                   |                                               |
+                   /                   &lt;BIT MAP>                   /
+                   /                                               /
+                   +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                   ADDRESS    InternetAddress
+                              length = 32bit
+                   PROTOCOL   IP protocol number
+                              length = 8bit
+                   &lt;BIT MAP>  one bit per port of protocol
+                              first  bit is port 0
+                              second bit is port 1 ... etc
+                              if does not include bit for protocol of interest
+                                 then that bit = 0
+                              length = multiple of 8bits
+                   well known services supported by protocol on internet address
+                   provides availability information for servers using TCP and UDP
+                   causes no additional section processing
+                   values and mnemonics for ports and protocols are in RFC1010
+
+                   if PROTOCOL = TCP (6)
+                      then 26th bit is TCP port 25 (SMTP)
+                                    if this bit is     set  then SMTP server should be listening on TCP port 25
+                                    if this bit is not set  then SMTP service is not supported on ADDRESS
+
+                   if server supports both TCP and UDP or
+                             has multiple InternetAddress
+                      then multiple WKS are used
+
+                   in MasterFiles ports and protocols are expressed using mnemonics or decimal numbers
+
+&lt;domain-name>  should follow DomainName syntax
+               sequence of Label
+               Label is a lengthField followed by that number of octets
+                     case-insensitive to NameServers
+                                         Resolvers
+                     lengthField value  < 64 octet
+                                 length = 1  octet
+               ends with Label Root
+                               lengthField = 0
+               length < 256 octet
+
+&lt;character-string> has binary information
+                   one LengthOctet followed by that number of octets
+                   LengthOctet length = 1 octet
+                   length <= 256 characters
+                          includes LengthOctet
+
+compression  eliminates repeated DomainNames
+             length of compressed data is used in length calculation in Message
+
+             Pointer  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                      | 1  1|                OFFSET                   |
+                      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                      length = 2 octet
+                      first two bits allows pointer to be distinguished from Label
+                      OFFSET  offset from start of message
+                              in octets
+                      only used on DomainName if format is not CLASS specific
+                      writing it may not be supported
+                      reading it must    be supported
+
+             example  datagram needs DomainNames  F.ISI.ARPA
+                                                  FOO.F.ISI.ARPA
+                                                  ARPA
+                                                  Root
+                      representation     +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      20 |           1           |           F           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      22 |           3           |           I           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      24 |           S           |           I           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      26 |           4           |           A           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      28 |           R           |           P           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      30 |           A           |           0           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      40 |           3           |           F           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      42 |           O           |           O           |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      44 | 1  1|                20                       |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      64 | 1  1|                26                       |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                                      92 |           0           |                       |
+                                         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+                                      F.ISI.ARPA      starts at offset 20
+                                      FOO.F.ISI.ARPA  starts at offset 40
+                                      offset 44       has pointer to F.ISI.ARPA
+                                      ARPA            is at offset 64
+                                      offset 64       has pointer to ARPA of F.ISI.ARPA
+                                      Root            is at offset 92
+
+transport over UDP  RFC768
+                    use port 53
+                    length <= 512 bytes
+                           does not count IP or UDP headers
+                    if > 512 bytes then Header TC bit is set
+                    not used for zone transfers
+                    Query may be lost
+                          retransmission strategy is required
+                          responses may be reordered by network
+                                                        processing in NameServer
+                    client should try other servers before retrying Query on same server
+                           retry interval should minimum 2-5 seconds
+
+              TCP  RFC793
+                   use port 53
+                   begins with lengthField
+                   lengthField  length 2byte
+                                number of bytes that follow
+                                allows assembling complete message before beginning to parse it
+
+                   server should not block other activities waiting for TCP data
+                                 support multiple connections
+                                 assume client will initiate connection closing
+                                 delay closing its end of connection
+                                               until all outstanding client requests are satisfied
+                                 allow SOA and AXFR request sequence on single TCP connection
+                          may use unilateral close or reset instead of graceful close
+                          if needs to close dormant connection
+                             then waits two minutes to close it
+
+MasterFile  used to define zone
+                    lists cache contents
+            format is a sequence of Entry
+            Entry  predominantly line oriented
+                   can use parentheses to continue list of items across line boundary
+                   text literals can have CRLF
+                   items can be separated by any combination of tabs and spaces
+                   lines  &lt;blank>[&lt;comment>]
+                          $ORIGIN &lt;domain-name> [&lt;comment>]
+                          $INCLUDE &lt;file-name> [&lt;domain-name>] [&lt;comment>]
+                          &lt;domain-name>&lt;rr> [&lt;comment>]
+                          &lt;blank>&lt;rr> [&lt;comment>]
+
+            &lt;comment>   starts with ;(semicolon)
+            [&lt;comment>] means  may have &lt;comment>
+
+            $ORIGIN   resets current origin for relative &lt;domain-name> to stated &lt;domain-name>
+            $INCLUDE  inserts &lt;file-name> into current file
+                      &lt;domain-name> sets relative DomainName origin for &lt;file-name>
+                      never changes relative origin of parent file
+
+            &lt;rr>  represent RR
+                  if &lt;blank>&lt;rr>       then RR is owned by last stated owner
+                  if &lt;domain-name>&lt;rr> then RR owner name is reset
+                  = [&lt;TTL>] [&lt;class>] &lt;type> &lt;RDATA>
+                  = [&lt;class>] [&lt;TTL>] &lt;type> &lt;RDATA>
+
+                  &lt;class>  uses standard mnemonics
+                           mnemonics are disjoint
+                           parse is unique
+                  &lt;type>   uses standard mnemonics
+                           mnemonics are disjoint
+                           parse is unique
+                  &lt;TTL>    decimal integer
+                  omitted &lt;class> and &lt;TTL> values are default to last explicitly stated values
+
+            &lt;domain-name>  character strings
+                           labels are separated by dots
+                           arbitrary characters can be stored using quoting conventions
+                           if        end in dot then is absolute DomainName and taken as complete
+                           if do not end in dot then is relative DomainName
+                           if making relative DomainName into absolute DomainName
+                              then concatenat relative part with origin part in $ORIGIN  or
+                                                                                $INCLUDE or
+                                                                                argument to MasterFile loading routine
+                           if is relative DomainName and no origin is available then error
+
+            &lt;character-string>  either - contiguous set of characters
+                                         no interior spaces
+                                       - string begining with " and ending with "
+                                         inside ""  any character can occur
+                                                    " must be quoted using \ (back slash)
+            encodings        of root
+
+                       @     denotes current origin
+
+                       \X    X is any character other than digit(0-9)
+                             used to quote X so that its special meaning does not apply
+                             example  \. can be used to place . in label
+
+                       \DDD  D is a digit
+                             DDD is a decimal number
+                                 an octet
+                                 assumed to be text
+                                 has no special meaning
+
+                       ( )   used to group data that crosses a line boundary
+                             line terminations are not recognized within parentheses
+
+                       ;     remainder of line is ignored
+
+            if used to load zone and errors are encountered
+               then stop loading
+            if used to load zone
+               then all RRs should have same CLASS
+                    one SOA RR should be present at top of zone
+                    if delegations are present and
+                       glue information is required
+                       then glue information should be present
+                    zone information outside of authoritative nodes should be glue information
+                                                                           not be result of an origin error or similar error
+            example  defines ISI.EDU zone
+                     is loaded with an origin of ISI.EDU
+                     \ character in SOA RR specifies responsible person mailbox "Action.domains@E.ISI.EDU"
+
+                     file  ---------------------------------------------------
+                           |@   IN  SOA     VENERA      Action\.domains (    |
+                           |                                 20     ; SERIAL |
+                           |                                 7200   ; REFRESH|
+                           |                                 600    ; RETRY  |
+                           |                                 3600000; EXPIRE |
+                           |                                 60)    ; MINIMUM|
+                           |                                                 |
+                           |        NS      A.ISI.EDU.                       |
+                           |        NS      VENERA                           |
+                           |        NS      VAXA                             |
+                           |        MX      10      VENERA                   |
+                           |        MX      20      VAXA                     |
+                           |                                                 |
+                           |A       A       26.3.0.103                       |
+                           |                                                 |
+                           |VENERA  A       10.1.0.52                        |
+                           |        A       128.9.0.32                       |
+                           |                                                 |
+                           |VAXA    A       10.2.0.27                        |
+                           |        A       128.9.0.33                       |
+                           |                                                 |
+                           |                                                 |
+                           |$INCLUDE &lt;SUBSYS>ISI-MAILBOXES.TXT               |
+                           ---------------------------------------------------
+
+                     &lt;SUBSYS>ISI-MAILBOXES.TXT  -----------------------------
+                                                | MOE     MB      A.ISI.EDU.|
+                                                | LARRY   MB      A.ISI.EDU.|
+                                                | CURLEY  MB      A.ISI.EDU.|
+                                                | STOOGES MG      MOE       |
+                                                |         MG      LARRY     |
+                                                |         MG      CURLEY    |
+                                                -----------------------------
+
+NameServer  does not block UDP requests while waiting for TCP data
+            may serialize requests from single client
+                regard identical requests from same client as duplicates
+            should not delay requests if reloading zone from MasterFiles or
+                                         adding refreshed zone into database
+            Database  may have any structure
+                      suggested  DataStructure1  named "catalog"
+                                                 lists zones available to server
+                                                 a tree structure that points to places in "zones"
+                                                 use to find nearest ancestor of zone
+                                                 may have parameters to control zone refreshing activities
+                                                 saved across system crashes
+                                 DataStructure2  named "zones"
+                                                 a tree structure that has RRs
+                                                 saved across system crashes
+                                 DataStructure3  for cached data or separate caches for different classes
+                                                 a tree structure that has RRs
+                                                 saved across system crashes
+                                 tree node has  all ASCII characters in a single case
+                                                bit mask defining characters case
+                                           uses LinkedList if branching factor is small
+                                                HashTable  if branching factor is big
+                      if zone is refreshed then Response should not combine old-new zone data
+                      authoritative data takes precedence over cached data
+                      data errors in zone can't corrupt another zone
+                      cache corruption is discarded without corrupting zone data
+                      if sending zone via AXFR and
+                         during transfer a new zone version is created
+                         then should continue sending old version
+                                     if completion is not possible
+                                        then reset connection
+
+            Time  RRs in zones   use RelativeTime
+                  refresh timers use AbsoluteTime
+                  cache data     use AbsoluteTime
+                  RelativeTime   is the seconds left until somethig happens
+                  AbsoluteTime   is at what time will somethig happen
+                                 converted to RelativeTime if placed in Response
+                                 if conversion results in negative number
+                                    then data is expired and ignored
+
+            InverseQuery  example  Query        maps         DomainName   to  HostAddress
+                                   InverseQuery maps         HostAddress  to  DomainNames
+                                                does not map HostAddress  to  HostNames
+                          useful for database management and debugging activities
+
+                          InvertedDatabase  used by NameServer to support InverseQuery
+                                            one for each zone
+                                            structure according to search key
+                                            future versions of DNS may support transfers of InvertedDatabase
+
+                          case-insensitive  example  get same Response for InverseQuery MX    RR "Venera.isi.edu"
+                                                                           InverseQuery MX    RR "VENERA.ISI.EDU"
+                                                     get same Response for InverseQuery HINFO RR "IBM-PC UNIX"
+                                                                           InverseQuery HINFO RR "IBM-pc unix"
+                                            not guaranteed because NameServers may have unknown character in string in RR
+
+                          request   Answer   has one RR
+                                    Question has nothing
+                                    owner name is ignored
+                                    TTL        is ignored
+
+                          Response  Question has zero or more DomainName
+                                                 all DomainNames known to NameServer
+                                    Answer owner name matches RR found at the first QNAME
+                                           TTL        matches RR found at the first QNAME
+                                    RR cannot be cached using same mechanism of Query
+                                    if NameServer does not support InverseQuery
+                                       then Response has "Not Implemented" error in Header
+
+                          example  request              +-----------------------------------------+
+                                              Header    |          OPCODE=IQUERY, ID=997          |
+                                                        +-----------------------------------------+
+                                             Question   |                 &lt;empty>                 |
+                                                        +-----------------------------------------+
+                                              Answer    |        &lt;anyname> A IN 10.1.0.52         |
+                                                        +-----------------------------------------+
+                                             Authority  |                 &lt;empty>                 |
+                                                        +-----------------------------------------+
+                                            Additional  |                 &lt;empty>                 |
+                                                        +-----------------------------------------+
+                                            asks for Question whose Answer is Internet style address 10.1.0.52.
+                                            may use Root to minimize length
+
+                                   Response              +-----------------------------------------+
+                                               Header    |         OPCODE=RESPONSE, ID=997         |
+                                                         +-----------------------------------------+
+                                              Question   |QTYPE=A, QCLASS=IN, QNAME=VENERA.ISI.EDU |
+                                                         +-----------------------------------------+
+                                               Answer    |  VENERA.ISI.EDU  A IN 10.1.0.52         |
+                                                         +-----------------------------------------+
+                                              Authority  |                 &lt;empty>                 |
+                                                         +-----------------------------------------+
+                                             Additional  |                 &lt;empty>                 |
+                                                         +-----------------------------------------+
+                                             QTYPE is equal to TYPE in Answer of request
+
+                          optional completion services RFC882 and RFC883
+                                                       have been deleted
+                                                       redesigns may become available in the future
+
+Resolver  is able to multiplex multiple requests
+
+          steps  receives Query from UserProgram
+                 use Query to create Block
+                 creates Query to send to NameServer
+                               may revise CNAME
+                 NameServer is selected from SLIST
+
+                 if no HostAddress available from SLIST and
+                    SLIST NameServers are used to look up their own HostAddress
+                    then search next ancestor zone or Root in SLIST
+
+                 if NameServer response takes too long and causes timeout
+                    then either send UserProgram a temporary error
+                                ask another NameServer
+                 NameServer response timeout should be 50-100% > average predicted value
+
+                 if receive some error from NameServer or
+                    NameServer has no current copy of zone
+                    then remove NameServer from SLIST
+                         ask another NameServer
+
+                 if receive NameServer response
+                    then check RR correct format
+                               TTL < 1 week
+                               it is not a Query
+                               if it has something wrong then discard response
+                         match it to original Query of UserProgram
+                               using ID of Header
+                         check Question has information desired
+                         watchout NameServer response may come from different HostAddress
+                         may cache response to use for other UserProgram request
+
+
+          Block  timestamp  time request began
+                            used to decide if RRs in database can be used or are out of date
+                            uses AbsoluteTime
+                            format is superior to using a current time
+                                   allows RR with TTL=0 to be entered in cache
+                                                              used by current request even after intervals of many seconds
+                 counter to limit work on single request
+                         set to some initial value
+                         if Resolver acts on request
+                            then counter is decremented
+                         if counter < 0
+                            then request is terminated with temporary error
+                         if Resolver allows request to start other request in parallel
+                            then counter of started request < counter of parent request
+                                 prevent circular references in database
+                                         chain reaction of Resolver activity
+                 SLIST RFC1034
+                       data structure
+                       keeps track of state of request to NameServers
+
+          SLIST  list of NS RR
+                 nearest ancestor zone Resolver knows
+                 initialize  with default list of NS
+                             list filled by getting data using request
+                             get HostAddress of NameServers
+                             get reponse times of HostAddress
+                                               5-10 seconds should be worst case
+                             reinitialize if delegation
+
+          cache  if received Response has RRs have same type and owner name
+                    then cache all or none
+                 if received Response is truncated and
+                    resolver doesn't know the continuation
+                    then do not cache
+                 if selecting between cached data or authoritative data
+                    then select authoritative data and delete cached data
+                 if Query QNAME has "*" and
+                    received Response is used to construct wildcard
+                    then do not cache data of Response
+                 if received Response has RR data other than requested
+                    then do not cache data of Response
+                 sanity checks on packet are performed before caching it
+                 if received Response     has RRs for DomainName
+                    then if cache already has RRs for DomainName
+                            then either replace old cache data with Response data
+                                        leave chache as it is
+                                 authoritative data in Response is preferred for caching
+
+Mail  MailboxName &lt;local-part>@&lt;mail-domain>
+      if creating Mail name then follow rules of RFC822
+      mapping MailboxName into DomainName
+              dots or other special characters use backslash quoting
+              examples  HOSTMASTER@SRI-NIC.ARPA  into  HOSTMASTER.SRI-NIC.ARPA
+                        Action.domains@ISI.EDU   into  Action\.domains.ISI.EDU
+
+      do     map MailboxName to DomainName to InternetAddress
+      do not map MailboxName               to InternetAddress
+
+      MailExchangeBinding  RFC974
+                           uses &lt;mail-domain> to determine where mail should be sent
+                                              as DomainName to find MX RRs
+                           uses MX RRs to list Hosts willing to accept mail for &lt;mail-domain>
+                                          rank Hosts in order prefered by administrators of &lt;mail-domain>
+                           example  start with Mockapetris@ISI.EDU
+                                    &lt;mail-domain> is ISI.EDU
+                                    lookup MX RRs of ISI.EDU
+                                           returns VENERA.ISI.EDU
+                                                   VAXA.ISI.EDU
+                                    send Query with A to get HostAddress
+
+      MailboxBinding  experimental
+                      still under development
+                      steps  mailer maps MailboxName into DomainName
+                             DomainName is the QNAME in MAILB of Query
+                             mailer sends Query
+                             may return  name error if use of MailboxBinding is universal
+                                                       then this error means specified mailbox doesn't exist as DomainName
+                                                    if use of MailboxBinding is not universal
+                                                       then this error means organization identified by global part
+                                                                                          does not support MailboxBinding
+                                                            revert to MailExchangeBinding
+                             may return  Mail Rename (MR) RR
+                                         carring new mailbox specification in RDATA
+                                         then mailer should replace old mailbox with new one and retry operation
+
+                             may return  mailbox domain name (MB) RR
+                                         DomainName for Host in RDATA
+                                         then mailer should deliver message to that Host via protocol applicable, e.g., b,SMTP
+
+                             may return  one or more Mail Group (MG) RRs
+                                         meaning mailbox was actually mailing list or mail group rather than single mailbox
+                                         RDATA has mailbox that is member of group
+                                         mailer should deliver copy of message to each member
+
+                             may return  (MB) RR and one or more (MG) RRs
+                                         which means mailbox is a mailing list
+                                         then mailer either delivers message to Host in (MB) RR then Host does delivery to all members
+                                                            uses (MG) RRs to do the expansion itself
+
+IN-ADDR.ARPA  special DomainName in Internet
+              used to map InternetAddress to Host DomainName
+                      find InternetAddress of Gateway
+              returned data may be inconsistent
+
+              DomainNames  can have up to four Labeel in addition to IN-ADDR.ARPA suffix
+
+                           Labeel character string
+                                  represents one octet of InternetAddress
+                                  leading zeros omitted except zero octet which is one zero
+
+                           Labeels of InternetAddress are in reverse order
+
+                           example  22.0.2.10.IN-ADDR.ARPA
+                                    data of InternetAddress 10.2.0.22 is at DomainName 22.0.2.10.IN-ADDR.ARPA
+
+              zones are exactly one Network of address space
+                    example 10.IN-ADDR.ARPA can be zone containing data for ARPANET
+                            26.IN-ADDR.ARPA can be zone containing data for MILNET
+
+              example database  10.IN-ADDR.ARPA.          PTR MILNET-GW.ISI.EDU.
+                                10.IN-ADDR.ARPA.          PTR GW.LCS.MIT.EDU.
+                                18.IN-ADDR.ARPA.          PTR GW.LCS.MIT.EDU.
+                                26.IN-ADDR.ARPA.          PTR MILNET-GW.ISI.EDU.
+                                22.0.2.10.IN-ADDR.ARPA.   PTR MILNET-GW.ISI.EDU.
+                                103.0.0.26.IN-ADDR.ARPA.  PTR MILNET-GW.ISI.EDU.
+                                77.0.0.10.IN-ADDR.ARPA.   PTR GW.LCS.MIT.EDU.
+                                4.0.10.18.IN-ADDR.ARPA.   PTR GW.LCS.MIT.EDU.
+                                103.0.3.26.IN-ADDR.ARPA.  PTR A.ISI.EDU.
+                                6.0.0.10.IN-ADDR.ARPA.    PTR MULTICS.MIT.EDU.
+
+                                here ISI Gateway with Network 10                 has Host DomainName MILNET-GW.ISI.EDU
+                                     MIT Gateway with InternetAddress 10.0.0.77  has Host DomainName GW.LCS.MIT.EDU
+
+                                if using database to initialize routing tables
+                                   then start with enough Gateway data to access appropriate NameServer
+
+              if UserProgram wants to find Gateways on Network 10
+                 then send    Query  QTYPE=PTR, QCLASS=IN, QNAME=10.IN-ADDR.ARPA.
+                      receive RR     10.IN-ADDR.ARPA.  PTR MILNET-GW.ISI.EDU.
+                              RR     10.IN-ADDR.ARPA.  PTR GW.LCS.MIT.EDU.
+                      send    Query  QTYPE=A, QCLASS=IN for MILNET-GW.ISI.EDU.
+                                                            GW.LCS.MIT.EDU.
+                              to discover InternetAddress of Gateways
+
+              if Resolver wants to find Host DomainName of InternetAddress 10.0.0.6
+                 then send     Query  QTYPE=PTR, QCLASS=IN, QNAME=6.0.0.10.IN-ADDR.ARPA
+                      receive  RR     6.0.0.10.IN-ADDR.ARPA.  PTR MULTICS.MIT.EDU.
+
+
+              if one Gateway has 2 DomainName
+                 then only one can be primary
+
+              Gateway data doesn't replace the information from GGP or EGP
+
+Defining new TYPE, CLASS, special namespaces
+
+    NAMEDROPPERS@SRI-NIC.ARPA  a mailing list
+                               forum discussing general design issues
+
+    new TYPE  created if new information is to be added to database about existing object
+                         new data formats for new object
+              RDATA designed to be generally applicable to all CLASS
+                                avoid duplication of information
+              needs mnemonics for MasterFiles
+              multiple TYPE are not stored in one RDATA of RR
+              multiple RR TYPE should not be used to create an ordering between entries
+                                                     express different formats for equivalent bindings
+
+    new CLASS is created if DNS is used in new protocol and
+                            requires new class-specific data formats
+                         if copy of existing DomainNameSpace is desired but separate management domain is necessary
+              needs mnemonics for MasterFiles
+
+    MasterFiles format requires disjoint mnemonics for new TYPE or CLASS
+
+
+
+SCENARIO  -----------------------------------------------------------------------------
+          |                                                                           |
+          |                                                                           |
+          |                                |(C.ISI.EDU,SRI-NIC.ARPA A.ISI.EDU)        |
+          |          +---------------------+------------------+                       |
+          |          |                     |                  |                       |
+          |         MIL                   EDU                ARPA                     |
+          |          |(SRI-NIC.ARPA,       |(SRI-NIC.ARPA,    |                       |
+          |          | A.ISI.EDU)          | C.ISI.EDU)       |                       |
+          |    +-----+-----+               |     +------+-----+-----+                 |
+          |    |     |     |               |     |      |           |                 |
+          |   BRL  NOSC  DARPA             |  IN-ADDR  SRI-NIC     ACC                |
+          |                                |                                          |
+          |    +--------+------------------+---------------+--------+                 |
+          |    |        |                  |               |        |                 |
+          |   UCI      MIT                 |              UDEL     YALE               |
+          |             |(XX.LCS.MIT.EDU, ISI                                         |
+          |             |ACHILLES.MIT.EDU) |(VAXA.ISI.EDU,VENERA.ISI.EDU,A.ISI.EDU)   |
+          |         +---+---+              |                                          |
+          |         |       |              |                                          |
+          |        LCS   ACHILLES +--+-----+-----+--------+                           |
+          |         |             |  |     |     |        |                           |
+          |         XX            A  C   VAXA  VENERA Mockapetris                     |
+          |                                                                           |
+          -----------------------------------------------------------------------------
+
+          NameServers are in parentheses
+                      are authoritative
+                      control nodes where they are located
+          Root NameServers are C.ISI.EDU
+                               SRI-NIC.ARPA
+                               A.ISI.EDU
+          MIL domain is served by SRI-NIC.ARPA
+                                  A.ISI.EDU
+          EDU domain is served by SRI-NIC.ARPA
+                                  C.ISI.EDU
+          C.ISI.EDU has contiguous   zones at Root and EDU
+          A.ISI.EDU has contiguous   zones at Root and MIL
+                        nocontiguous zone  at ISI.EDU
+
+          C.ISI.EDU  NameServer  for Root of CLASS IN
+                                     MIL  of CLASS IN
+                                     EDU  of CLASS IN
+
+                                 zone data for Root
+                                           ------------------------------------------------------------------
+                                           |.       IN      SOA     SRI-NIC.ARPA. HOSTMASTER.SRI-NIC.ARPA. (|
+                                           |                        870611          ;serial                 |
+                                           |                        1800            ;refresh every 30 min   |
+                                           |                        300             ;retry every 5 min      |
+                                           |                        604800          ;expire after a week    |
+                                           |                        86400)          ;minimum of a day       |
+                                           |                NS      A.ISI.EDU.                              |
+                                           |                NS      C.ISI.EDU.                              |
+                                           |                NS      SRI-NIC.ARPA.                           |
+                                           |                                                                |
+                                           |MIL.    86400   NS      SRI-NIC.ARPA.                           |
+                                           |        86400   NS      A.ISI.EDU.                              |
+                                           |                                                                |
+                                           |EDU.    86400   NS      SRI-NIC.ARPA.                           |
+                                           |        86400   NS      C.ISI.EDU.                              |
+                                           |                                                                |
+                                           |SRI-NIC.ARPA.   A       26.0.0.73                               |
+                                           |                A       10.0.0.51                               |
+                                           |                MX      0 SRI-NIC.ARPA.                         |
+                                           |                HINFO   DEC-2060 TOPS20                         |
+                                           |                                                                |
+                                           |ACC.ARPA.       A       26.6.0.65                               |
+                                           |                HINFO   PDP-11/70 UNIX                          |
+                                           |                MX      10 ACC.ARPA.                            |
+                                           |                                                                |
+                                           |USC-ISIC.ARPA.  CNAME   C.ISI.EDU.                              |
+                                           |                                                                |
+                                           |73.0.0.26.IN-ADDR.ARPA.  PTR    SRI-NIC.ARPA.                   |
+                                           |65.0.6.26.IN-ADDR.ARPA.  PTR    ACC.ARPA.                       |
+                                           |51.0.0.10.IN-ADDR.ARPA.  PTR    SRI-NIC.ARPA.                   |
+                                           |52.0.0.10.IN-ADDR.ARPA.  PTR    C.ISI.EDU.                      |
+                                           |103.0.3.26.IN-ADDR.ARPA. PTR    A.ISI.EDU.                      |
+                                           |                                                                |
+                                           |A.ISI.EDU. 86400 A      26.3.0.103                              |
+                                           |C.ISI.EDU. 86400 A      10.0.0.52                               |
+                                           ------------------------------------------------------------------
+                                           as it would be in MasterFile
+                                           all RR must be same CLASS
+                                           only first RR needs specify CLASS
+                                           loading zone applies MINIMUM=86400 in SOA to all authoritative RR
+                                           NS   RRs marking delegation of MIL and EDU  are not authoritative data
+                                           glue RRs for servers host InternetAddresses are not authoritative data
+                                           data that is not authoritative has explicit TTL
+                                           4 RRs are attached to Root
+                                                 SOA describes Root
+                                                               management of zone data
+                                                 NS are Root NameServers
+                                           maintained on host SRI-NIC.ARPA
+                                           responsible party is HOSTMASTER@SRI-NIC.ARPA
+                                           NS RRs for MIL EDU mark boundary between Root zone and MIL EDU zones
+                                           root zone and lower zones are supported by same NameServers
+                                           MasterFile for EDU zone may be stated relative to origin EDU
+
+                                 zone data for EDU
+                                           --------------------------------------------------------
+                                           |EDU.  IN SOA SRI-NIC.ARPA. HOSTMASTER.SRI-NIC.ARPA. ( |
+                                           |                        870729 ;serial                |
+                                           |                        1800 ;refresh every 30 minutes|
+                                           |                        300 ;retry every 5 minutes    |
+                                           |                        604800 ;expire after a week   |
+                                           |                        86400 ;minimum of a day       |
+                                           |                        )                             |
+                                           |                NS SRI-NIC.ARPA.                      |
+                                           |                NS C.ISI.EDU.                         |
+                                           |                                                      |
+                                           |UCI 172800 NS ICS.UCI                                 |
+                                           |    172800 NS ROME.UCI                                |
+                                           |ICS.UCI  172800 A 192.5.19.1                          |
+                                           |ROME.UCI 172800 A 192.5.19.31                         |
+                                           |ISI 172800 NS VAXA.ISI                                |
+                                           |    172800 NS A.ISI                                   |
+                                           |    172800 NS VENERA.ISI.EDU.                         |
+                                           |VAXA.ISI 172800 A 10.2.0.27                           |
+                                           |         172800 A 128.9.0.33                          |
+                                           |VENERA.ISI.EDU. 172800 A 10.1.0.52                    |
+                                           |                172800 A 128.9.0.32                   |
+                                           |A.ISI 172800 A 26.3.0.103                             |
+                                           |                                                      |
+                                           |UDEL.EDU.  172800 NS LOUIE.UDEL.EDU.                  |
+                                           |           172800 NS UMN-REI-UC.ARPA.                 |
+                                           |LOUIE.UDEL.EDU. 172800 A 10.0.0.96                    |
+                                           |                172800 A 192.5.39.3                   |
+                                           |                                                      |
+                                           |YALE.EDU.  172800 NS YALE.ARPA.                       |
+                                           |YALE.EDU.  172800 NS YALE-BULLDOG.ARPA.               |
+                                           |                                                      |
+                                           |MIT.EDU.  43200 NS XX.LCS.MIT.EDU.                    |
+                                           |          43200 NS ACHILLES.MIT.EDU.                  |
+                                           |XX.LCS.MIT.EDU.   43200 A 10.0.0.44                   |
+                                           |ACHILLES.MIT.EDU. 43200 A 18.72.0.8                   |
+                                           --------------------------------------------------------
+                                           owner name of ISI.EDU. is using relative name
+                                           ISI.EDU two RRs       are using relative name
+                                           relative and absolute DomainName may be intermixed
+
+          Query             +---------------------------------------------------+
+                 Header     | OPCODE=SQUERY                                     |
+                            +---------------------------------------------------+
+                 Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=A           |
+                            +---------------------------------------------------+
+                 Answer     | &lt;empty>                                           |
+                            +---------------------------------------------------+
+                 Authority  | &lt;empty>                                           |
+                            +---------------------------------------------------+
+                 Additional | &lt;empty>                                           |
+                            +---------------------------------------------------+
+
+          response  from NameServer C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=A           |
+                               +---------------------------------------------------+
+                    Answer     | SRI-NIC.ARPA. 86400 IN A 26.0.0.73                |
+                               |               86400 IN A 10.0.0.51                |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    RESPONSE bit is set
+                    AA       bit is set
+                    Question of response matches Question of Query
+
+          response  from NameServer not authoritative for SRI-NIC.ARPA
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY,RESPONSE                            |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=A           |
+                               +---------------------------------------------------+
+                    Answer     | SRI-NIC.ARPA. 1777 IN A 10.0.0.51                 |
+                               |               1777 IN A 26.0.0.73                 |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    AA bit is not set
+                    data did not come from zone  data
+                    data did     come from cache data
+                    authoritative TTLs in zone  data tend to be bigger than
+                    authoritative TTLs in cache data
+                    Answer RRs ordering is not significant
+
+          Query             +---------------------------------------------------+
+                 Header     | OPCODE=SQUERY                                     |
+                            +---------------------------------------------------+
+                 Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=*           |
+                            +---------------------------------------------------+
+                 Answer     | &lt;empty>                                           |
+                            +---------------------------------------------------+
+                 Authority  | &lt;empty>                                           |
+                            +---------------------------------------------------+
+                 Additional | &lt;empty>                                           |
+                            +---------------------------------------------------+
+
+          response  from NameServer C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=*           |
+                               +---------------------------------------------------+
+                    Answer     | SRI-NIC.ARPA. 86400 IN  A     26.0.0.73           |
+                               |                         A     10.0.0.51           |
+                               |                         MX    0 SRI-NIC.ARPA.     |
+                               |                         HINFO DEC-2060 TOPS20     |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+
+          response  from NameServerA not authoritative for SRI-NIC.ARPA
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE                           |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=*           |
+                               +---------------------------------------------------+
+                    Answer     | SRI-NIC.ARPA. 12345 IN     A       26.0.0.73      |
+                               |                            A       10.0.0.51      |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+          response  from NameServerB not authoritative for SRI-NIC.ARPA
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE                           |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=*           |
+                               +---------------------------------------------------+
+                    Answer     | SRI-NIC.ARPA. 1290 IN HINFO  DEC-2060 TOPS20      |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+          NameServerA and NameServerB response contents and TTLs suggest cached data at different times
+          NameServerA cached response to QTYPE=A Query
+          NameServerB cached response to HINFO   Query
+
+          Query     QNAME=SRI-NIC.ARPA  QTYPE=MX
+                    from mailer aking routing information for HOSTMASTER@SRI-NIC.ARPA
+          response  from NameServer C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=MX          |
+                               +---------------------------------------------------+
+                    Answer     | SRI-NIC.ARPA. 86400 IN     MX      0 SRI-NIC.ARPA.|
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | SRI-NIC.ARPA. 86400 IN     A       26.0.0.73      |
+                               |                            A       10.0.0.51      |
+                               +---------------------------------------------------+
+                    Additional has A because it may be needed to properly use MX
+
+          Query     QNAME=SRI-NIC.ARPA  QTYPE=NS
+          response  from NameServer C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SRI-NIC.ARPA., QCLASS=IN, QTYPE=NS          |
+                               +---------------------------------------------------+
+                    Answer     | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    only difference to Query is AA
+                                                RESPONSE
+                    SRI-NIC.ARPA exists but no RRs of type NS exist
+
+          Query     QNAME=SIR-NIC.ARPA  QTYPE=A
+                    mistyped SRI-NIC.ARPA
+          response  from NameServer C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA, RCODE=NE             |
+                               +---------------------------------------------------+
+                    Question   | QNAME=SIR-NIC.ARPA., QCLASS=IN, QTYPE=A           |
+                               +---------------------------------------------------+
+                    Answer     | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Authority  | . SOA SRI-NIC.ARPA. HOSTMASTER.SRI-NIC.ARPA.      |
+                               |       870611 1800 300 604800 86400                |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    RCODE=NE means that SIR-NIC.ARPA does not exist
+                    SIR-NIC.ARPA will not exist for MINIMUM 86400 seconds
+
+          Query     QNAME=BRL.MIL  QTYPE=A
+          response  from NameServer C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE                           |
+                               +---------------------------------------------------+
+                    Question   | QNAME=BRL.MIL, QCLASS=IN, QTYPE=A                 |
+                               +---------------------------------------------------+
+                    Answer     | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Authority  | MIL.             86400 IN NS       SRI-NIC.ARPA.  |
+                               |                  86400    NS       A.ISI.EDU.     |
+                               +---------------------------------------------------+
+                    Additional | A.ISI.EDU.                A        26.3.0.103     |
+                               | SRI-NIC.ARPA.             A        26.0.0.73      |
+                               |                           A        10.0.0.51      |
+                               +---------------------------------------------------+
+                    is referral because Answer empty
+                                        AA bit not set
+                                to authoritative NameServer SRI-NIC.ARPA
+                                   authoritative NameServer A.ISI.EDU
+
+          Query     QNAME=USC-ISIC.ARPA  QTYPE=A
+          response  from NameServer A.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=USC-ISIC.ARPA., QCLASS=IN, QTYPE=A          |
+                               +---------------------------------------------------+
+                    Answer     | USC-ISIC.ARPA. 86400 IN CNAME      C.ISI.EDU.     |
+                               | C.ISI.EDU.     86400 IN A          10.0.0.52      |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    AA bit          makes Answer CNAME data authoritative
+                           does not make  Answer A     data authoritative
+                    A.ISI.EDU is authoritative for ARPA    where USC-ISIC.ARPA  is found
+                                                   ISI.EDU where C.ISI.EDU data is found
+          response  from NameServer C.ISI.EDU
+                    may be equal to response from NameServer A.ISI.EDU if NameServer C.ISI.EDU has RR A in cache
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=USC-ISIC.ARPA., QCLASS=IN, QTYPE=A          |
+                               +---------------------------------------------------+
+                    Answer     | USC-ISIC.ARPA.   86400 IN CNAME   C.ISI.EDU.      |
+                               +---------------------------------------------------+
+                    Authority  | ISI.EDU.        172800 IN NS      VAXA.ISI.EDU.   |
+                               |                           NS      A.ISI.EDU.      |
+                               |                           NS      VENERA.ISI.EDU. |
+                               +---------------------------------------------------+
+                    Additional | VAXA.ISI.EDU.   172800    A       10.2.0.27       |
+                               |                 172800    A       128.9.0.33      |
+                               | VENERA.ISI.EDU. 172800    A       10.1.0.52       |
+                               |                 172800    A       128.9.0.32      |
+                               | A.ISI.EDU.      172800    A       26.3.0.103      |
+                               +---------------------------------------------------+
+                    is authoritative for alias USC-ISIC.ARPA
+                    Authority has ISI.EDU. because CNAME points to C.ISI.EDU.
+
+          Query     QNAME=USC-ISIC.ARPA  QTYPE=CNAME
+          response  from NameServer A.ISI.EDU or C.ISI.EDU
+                               +---------------------------------------------------+
+                    Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                               +---------------------------------------------------+
+                    Question   | QNAME=USC-ISIC.ARPA., QCLASS=IN, QTYPE=A          |
+                               +---------------------------------------------------+
+                    Answer     | USC-ISIC.ARPA. 86400 IN CNAME      C.ISI.EDU.     |
+                               +---------------------------------------------------+
+                    Authority  | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    Additional | &lt;empty>                                           |
+                               +---------------------------------------------------+
+                    creator may look up something for Additional
+
+          Resolver  just did a system boot
+                    has empty cache data
+                    the system is not one of the hosts in the data
+                    host is on net 26
+                         has safety belt (SBELT) data  match count = -1
+                                                       SRI-NIC.ARPA.   26.0.0.73       10.0.0.51
+                                                       A.ISI.EDU.      26.3.0.103
+                                                 match count -1 means servers aren't very close to target
+                                                             is not accurate closeness measure
+                    receives Query from local mailer PVM@ISI.EDU
+                                   asking MX for ISI.EDU
+                    searches in cache data for MX at ISI.EDU
+                    cache data is empty
+                    searches in cache data for NS with ISI.EDU
+                                                       EDU,
+                                                       Root
+                    cache data is empty
+                    copies SBELT into SLIST
+                    selects one InternetAddress of SBELT
+                    selects closest IP to net 26
+                                    either 26.0.0.73
+                                           26.3.0.103
+                    sends Query  to 26.0.0.73
+                                            +---------------------------------------------------+
+                                 Header     | OPCODE=SQUERY                                     |
+                                            +---------------------------------------------------+
+                                 Question   | QNAME=ISI.EDU., QCLASS=IN, QTYPE=MX               |
+                                            +---------------------------------------------------+
+                                 Answer     | &lt;empty>                                           |
+                                            +---------------------------------------------------+
+                                 Authority  | &lt;empty>                                           |
+                                            +---------------------------------------------------+
+                                 Additional | &lt;empty>                                           |
+                                            +---------------------------------------------------+
+                    waits for response
+                    timeout occurs
+                    tries different servers in SLIST
+                    tries different InternetAddresses of same servers in SLIST
+                    retries InternetAddresses in SLIST
+                    receives  from SRI-NIC.ARPA
+                                         +---------------------------------------------------+
+                              Header     | OPCODE=SQUERY, RESPONSE                           |
+                                         +---------------------------------------------------+
+                              Question   | QNAME=ISI.EDU., QCLASS=IN, QTYPE=MX               |
+                                         +---------------------------------------------------+
+                              Answer     | &lt;empty>                                           |
+                                         +---------------------------------------------------+
+                              Authority  | ISI.EDU.        172800 IN NS       VAXA.ISI.EDU.  |
+                                         |                           NS       A.ISI.EDU.     |
+                                         |                           NS       VENERA.ISI.EDU.|
+                                         +---------------------------------------------------+
+                              Additional | VAXA.ISI.EDU.   172800    A        10.2.0.27      |
+                                         |                 172800    A        128.9.0.33     |
+                                         | VENERA.ISI.EDU. 172800    A        10.1.0.52      |
+                                         |                 172800    A        128.9.0.32     |
+                                         | A.ISI.EDU.      172800    A        26.3.0.103     |
+                                         +---------------------------------------------------+
+                              notice closer delegation to ISI.EDU than Resolver SLIST
+                                                       since it matches three labels
+                    caches received data
+                    sets up new SLIST  Match count = 3
+                                       A.ISI.EDU.      26.3.0.103
+                                       VAXA.ISI.EDU.   10.2.0.27       128.9.0.33
+                                       VENERA.ISI.EDU. 10.1.0.52       128.9.0.32
+                    Queries servers on new SLIST
+                    receives             +---------------------------------------------------+
+                              Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                                         +---------------------------------------------------+
+                              Question   | QNAME=ISI.EDU., QCLASS=IN, QTYPE=MX               |
+                                         +---------------------------------------------------+
+                              Answer     | ISI.EDU.                MX 10 VENERA.ISI.EDU.     |
+                                         |                         MX 20 VAXA.ISI.EDU.       |
+                                         +---------------------------------------------------+
+                              Authority  | &lt;empty>                                           |
+                                         +---------------------------------------------------+
+                              Additional | VAXA.ISI.EDU.   172800  A  10.2.0.27              |
+                                         |                 172800  A  128.9.0.33             |
+                                         | VENERA.ISI.EDU. 172800  A  10.1.0.52              |
+                                         |                 172800  A  128.9.0.32             |
+                                         +---------------------------------------------------+
+                    caches received data
+                    sends Response to local mailer
+                                   with MX
+
+                    now wants HostName for 26.6.0.65
+                    searches in cache data for 26.6.0.65
+                             fails
+                    searches in cache data for NS to ask for 26.6.0.65
+                             fails
+                    in chache data the servers for ISI.EDU are not ancestor of 26.6.0.65
+                    in SBELT       the servers have authoritative data for 26.6.0.65
+                    sends Query PTR 65.0.6.26.IN-ADDR.ARPA
+                                to one server in SBELT
+                    receives             +---------------------------------------------------+
+                              Header     | OPCODE=SQUERY, RESPONSE, AA                       |
+                                         +---------------------------------------------------+
+                              Question   | QNAME=65.0.6.26.IN-ADDR.ARPA.,QCLASS=IN,QTYPE=PTR |
+                                         +---------------------------------------------------+
+                              Answer     | 65.0.6.26.IN-ADDR.ARPA.    PTR     ACC.ARPA.      |
+                                         +---------------------------------------------------+
+                              Authority  | &lt;empty>                                           |
+                                         +---------------------------------------------------+
+                              Additional | &lt;empty>                                           |
+                                         +---------------------------------------------------+
+
+                    now wants host InternetAddress of poneria.ISI.EDU
+                    creates Query A to poneria.ISI.EDU
+                    search in cache data for A  poneria.ISI.EDU
+                           fails
+                    search in cache data for NS poneria.ISI.EDU
+                           finds NS ISI.EDU
+                    constructs SLIST  Match count = 3
+                                      A.ISI.EDU.      26.3.0.103
+                                      VAXA.ISI.EDU.   10.2.0.27       128.9.0.33
+                                      VENERA.ISI.EDU. 10.1.0.52
+                               A.ISI.EDU is first because of preference
+                                            on the same net
+                    one server in SLIST would answer Query
+    </pre>
+</body>
+</html>

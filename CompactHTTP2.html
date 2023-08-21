@@ -1,0 +1,1556 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>pre{font-family:Consolas,monospace;}</style>
+<title>CompactHTTP2</title>
+<meta charset="UTF-8">
+<meta name="description" content="learn TLS fast">
+<link rel="icon" type="image/jpg" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=">
+</head>
+<body style="background:rgb(44,44,44); line-height:100%; color: white;font-family:Consolas,monospace;">
+<pre>
+HTTP  Hypertext Transfer Protocol
+      HTTP/1.0  allows one outstanding request per TCP connection
+      HTTP/1.1  adds request pipelining
+                suffers from head-of-line blocking
+                HeaderField can be repetitive and verbose
+      HTTP/2    supports all core features of HTTP/1.1
+                can interleave requests and responses per TCP connection
+                can prioritize requests
+                can use fewer TCP connections
+                HeaderField uses efficient coding
+                uses binary message framing
+
+                is an application-layer protocol
+                runs on top of TCP
+                uses same "http" and "https" URI schemes as HTTP/1.1
+                     port  80  for "http"  URIs
+                           443 for "https" URIs
+                Client  initiates TCP connection
+                        ask if Server supports HTTP/2
+
+                VersionIdentifier  negotiation implies use of HTTP/2
+                                   "h2c"  means HTTP/2 over TCP without TLS
+                                          reserved from ALPN identifier space
+                                   "h2"   means HTTP/2 over TLS
+                                          used in TLS-ALPN extension field RFC7301
+                                          ALPN identifier = {0x68,0x32}
+
+StartSteps  "h2c"  noKnow  Client  does not know if Server supports HTTP/2
+                                   request "http" URI using HTTP/1.1
+                                           HeaderField  Upgrade         = "h2c"
+                                                        HTTP2-Settings  only one
+                                           if has payload body
+                                              then Client sends payload body before sending HTTP/2 frames
+                                           example  GET / HTTP/1.1
+                                                    Host: server.example.com
+                                                    Connection: Upgrade, HTTP2-Settings
+                                                    Upgrade: h2c
+                                                    HTTP2-Settings: &lt;base64url encoding of HTTP/2 SETTINGS payload>
+
+                                           stream  StreamIdentifier = 1
+                                                   state "half-closed (local)" to Client
+                                                   default priority
+
+                                   may use OPTIONS request to upgrade HTTP/1.1 to HTTP/2
+                                                           costing one more RTT
+                           Server  receives Client request
+                                   if does not support HTTP/2
+                                      then ignores Upgrade
+                                           responds example  HTTP/1.1 200 OK
+                                                             Content-Length: 243
+                                                             Content-Type: text/html
+
+                                                             ...
+                                   if supports HTTP/2 and
+                                      accepts upgrade
+                                      then ignore "h2" token in Upgrade HeaderField
+                                           respods 101(Switching Protocols)
+                                                   HTTP/2 frames have ConnectionPreface
+                                                                      response to client request
+                                                   example  HTTP/1.1 101 Switching Protocols
+                                                            Connection: Upgrade
+                                                            Upgrade: h2c
+
+                                                            [ HTTP/2 connection ...
+
+                           Client  receives 101 response
+                                   sends  ConnectionPreface
+
+                   yeKnow  Client  knows Server supports HTTP/2
+                                   may know using RFC7838
+                                   sends ConnectionPreface
+                                   then may immediately send HTTP request
+                           Server  receives ConnectionPreface
+                                   identifies HTTP/2 by presence of ConnectionPreface
+                                   sends ConnectionPreface
+
+            "h2"  Client  may or not know if Server supports HTTP/2
+                          request to an "https" URI using TLS-ALPN extension
+                          completes TLS handshake
+                          sends ConnectionPreface
+                  Server  receives request
+                          sends ConnectionPreface
+
+HTTP2-Settings  = token68  ABNF production RFC5234
+                           RFC7230 Section 2.1
+                only sent by Client
+                only for request to upgrade HTTP/1.1 to HTTP/2
+                only one per request
+                if not in request then Server does not upgrade to HTTP/2
+
+ConnectionPreface  = strg || sttngsFrmC  if sent by Client
+                   = sttngsFrmS          if sent by Server
+
+                   strg          = 0x505249202a20485454502f322e300d0a0d0a534d0d0a0d0a
+                                   "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+                                 designed so that intermediaries do not attempt to process further frames
+                   sttngsFrameC  Client SETTINGS frame
+                                 may be empty
+                   sttngsFrameS  Server SETTINGS frame
+                                 may be empty
+                   if receive invalid ConnectionPreface
+                      then send Connection error PROTOCOL_ERROR
+                           may not send GOAWAY since peer may not be using HTTP/2
+
+HTMLHeader  SenderSteps    put one or more HeaderField in HeaderList
+                           serialize HeaderList into HeaderBlock using HeaderCompression
+                           divided HeaderBlock into HeaderBlockFragments
+                           put HeaderBlockFragments in Payload of Frames
+                           Frames are transmitted to peer
+            receiverSteps  concatenate HeaderBlockFragments into HeaderBlock
+                           HeaderDeCompression
+                           reconstruct HeaderList
+                           read HeaderFields of HeaderList
+            HeaderField           same as in HTTP/1
+            HeaderBlock           apply HeaderDeCompression even if data will be discarded
+                                  is always processed to maintain correct connection state
+                                                      except if connection closes
+                                  if server receives very large HeaderBlock
+                                     then server may send HTTP 431 (Request Header Fields Too Large) status code RFC6585
+            HeaderBlockFragments  made of one or more octet sequences
+                                  put in Payload of one HEADERS      Frame followed by zero or more CONTINUATION Frames
+                                                    one PUSH_PROMISE Frame followed by zero or more CONTINUATION Frames
+                                  transmitted with no Frame of other Type   interleaved
+                                                                     stream interleaved
+            HeaderCompression  RFC7541
+                               is statefull
+                               if abused by waste of processing
+                                  then send stream error ENHANCE_YOUR_CALM
+
+Stream  created and used unilaterally
+        may be closed by Client or Server
+        has Frames exchanged between Client and Server
+                   processed in receiving order
+                   with  independent   sequence
+                         bidirectional sequence
+
+        States                           +--------+
+                                 send PP |        | recv PP
+                                ,--------|  idle  |--------.
+                               /         |        |         \
+                              v          +--------+          v
+                       +----------+          |           +----------+
+                       |          |          | send H /  |          |
+                ,------| reserved |          | recv H    | reserved |------.
+                |      | (local)  |          |           | (remote) |      |
+                |      +----------+          v           +----------+      |
+                |          |             +--------+             |          |
+                |          |     recv ES |        | send ES     |          |
+                |   send H |     ,-------|  open  |-------.     | recv H   |
+                |          |    /        |        |        \    |          |
+                |          v   v         +--------+         v   v          |
+                |      +----------+          |           +----------+      |
+                |      |   half   |          |           |   half   |      |
+                |      |  closed  |          | send R /  |  closed  |      |
+                |      | (remote) |          | recv R    | (local)  |      |
+                |      +----------+          |           +----------+      |
+                |           |                |                 |           |
+                |           | send ES /      |       recv ES / |           |
+                |           | send R /       v        send R / |           |
+                |           | recv R     +--------+   recv R   |           |
+                | send R /  `----------->|        |<-----------'  send R / |
+                | recv R                 | closed |               recv R   |
+                `----------------------->|        |<----------------------'
+                                         +--------+
+                map shows stream state transitions
+                          frames and flags affecting only those transitions
+
+                send  endpoint sends    this Frame
+                recv  endpoint receives this Frame
+                H     HEADERS       Frame followed by zero or more CONTINUATION Frames
+                PP    PUSH_PROMISE  Frame followed by zero or more CONTINUATION Frames
+                R     RST_STREAM    Frame
+                ES    Frame with END_STREAM bit set
+                      processed as separate event to Frame that has it
+
+               HEADERS      frame with END_STREAM bit set causes two state transitions
+                                                          is interpreted as H and ES
+               CONTINUATION frame does not result in state transitions
+               PRIORITY     frame may be sent and received in any state
+
+               if receive Frame and
+                  this description doesnt say what to do
+                  then may send Connection error PROTOCOL_ERROR
+
+               "idle"              starting state
+                                   if send or receive HEADERS Frame                          then "open"
+                                   if send or receive HEADERS Frame with END_STREAM bit set  then "half-closed"
+                                   if send    PUSH_PROMISE frame on another stream           then "reserved (local)"  for reserved stream
+                                   if receive PUSH_PROMISE frame on another stream           then "reserved (remote)" for reserved stream
+                                   PUSH_PROMISE frame reserves "idle" stream identified in PromisedStreamID
+                                                      is not sent on "idle" stream
+                                   if receive Frame with no HEADERS or PRIORITY
+                                      then send connection error PROTOCOL_ERROR
+
+               "reserved (local)"  state after sending PUSH_PROMISE frame
+                                   if send            HEADERS    frame  then "half-closed (remote)"
+                                   if send or receive RST_STREAM frame  then "closed" and
+                                                                             release stream reservation
+                                   if send Frame with no HEADERS     or
+                                                         RST_STREAM  or
+                                                         PRIORITY    then error
+                                   if receive Frame with no RST_STREAM or
+                                                            PRIORITY   or
+                                                            WINDOW_UPDATE
+                                      then send connection error PROTOCOL_ERROR
+
+               "reserved (remote)"  stream reserved by peer
+                                    if receive         HEADERS    Frame  then "half-closed (local)"
+                                    if send or receive RST_STREAM Frame  then "closed"
+                                                                              release stream reservation
+                                    may send PRIORITY Frame to reprioritize reserved stream
+                                    if send Frame with no RST_STREAM    or
+                                                          WINDOW_UPDATE or
+                                                          PRIORITY      then error
+                                    if receive Frame with no HEADERS    or
+                                                             RST_STREAM or
+                                                             PRIORITY
+                                       then connection error PROTOCOL_ERROR
+
+               "open"               may send or receive Frames with any Type
+                                    sender observes advertised stream-level FlowControl limits
+                                    if send    Frame END_STREAM bit set  then "half-closed (local)"
+                                    if receive Frame END_STREAM bit set  then "half-closed (remote)"
+                                    if send or receive RST_STREAM Frame  then "closed"
+
+               "half-closed (local)"  may receive Frames with any Type
+                                      if send Frames with no WINDOW_UPDATE or
+                                                             PRIORITY      or
+                                                             RST_STREAM    then error
+                                      if receive Frame END_STREAM bit set  then "closed"
+                                      if send or receive RST_STREAM Frame  then "closed"
+                                      may send WINDOW_UPDATE Frame for FlowControl
+                                      if receive Frame END_STREAM bit set
+                                         then ignore the following WINDOW_UPDATE Frames
+
+               "half-closed (remote)"  do not maintain peer FlowControl window
+                                       if receive Frames with no WINDOW_UPDATE or
+                                                                 RST_STREAM    or
+                                                                 PRIORITY
+                                          then send stream error STREAM_CLOSED
+                                       may send frames of any type
+                                       observe advertised stream-level FlowControl limits
+                                       if send Frame END_STREAM bit set     then "closed"
+                                       if send or receive RST_STREAM Frame  then "closed"
+
+               "closed"    terminal state
+                           if receive RST_STREAM Frame and
+                              receive Frame with no PRIORITY after
+                              then send stream error STREAM_CLOSED
+
+                           if receive Frame END_STREAM bit set and
+                              receive Frame with any Type after
+                              then stream error STREAM_CLOSED
+
+                           if send DATA or HEADERS with END_STREAM bit set
+                              then may receive WINDOW_UPDATE or RST_STREAM for a short period
+                                               and must ignore Frames
+                                                   may send connection error PROTOCOL_ERROR
+
+                           if peer has not received and processed RST_STREAM or END_STREAM
+                              then peer may send WINDOW_UPDATE or RST_STREAM
+
+                           if receive PRIORITY Frame and
+                              stream has been removed from dependency tree
+                              then may ignore PRIORITY Frame
+
+                           if sent RST_STREAM in previous state and
+                              state became "closed"             and
+                              receive any Frames after          then ignore received Frames
+                                                                     may send error
+                           if sent RST_STREAM and
+                              receive FlowControl Frame for example DATA
+                              then count FlowControl Frame toward FlowControl window
+
+                           if sent RST_STREAM             and
+                              received PUSH_PROMISE after and
+                              PUSH_PROMISE is not wanted  then send RST_STREAM
+
+        StreamIdentifier  = odd   if stream initiated by Client
+                            even  if stream initiated by Server
+                            0     is  used for connection control
+                                  not used to establish new stream
+                          > any stream previously created by endpoint
+                          if = unexpected value then send connection error PROTOCOL_ERROR
+
+                          if send or receive Frame in new stream   and
+                             other stream is "idle"                and
+                             "idle" stream StreamIdentifier < new stream
+                             then "idle" stream becomes "closed"
+
+                             example  if Client never sends   Frame on stream 5 and
+                                                sends HEADERS Frame on stream 7
+                                         then stream 5 becomes "closed"
+
+                          if Client wants to create new stream and
+                             StreamIdentifier value range is exhausted
+                             then Client creates new connection
+                          if Server wants to create new stream and
+                             StreamIdentifier value range is exhausted
+                             then Server sends GOAWAY Frame
+                                  then Client opens new connection
+
+        Priority  set using HEADERS  Frame
+                            PRIORITY Frame
+
+                  allows endpoint to express how peer may allocate resources when managing concurrent streams
+                  does not forces peer to process concurrent streams in a particular order
+                  depends on Dependency
+                             Weight
+                  for new Stream Dependency = 0
+                                 Weight     = 16
+
+                  Dependency  used by marking Stream as dependent on other stream
+                              parent is a stream upon which stream is dependent
+                              children may get resources only if parents are "closed" or blocked
+
+                              0  non-existent stream
+                                 root of tree
+                                 parent of parents
+
+                              if stream depends on itself then send stream error PROTOCOL_ERROR
+                              if stream has no parent then stream Dependency = 0
+                              if stream is "idle" then stream is not in tree
+                              if stream is not in tree then children get Dependency = 0
+                                                                         Weight     = 16
+
+                              DefaultFlag    StreamIdentifier is added as new child to StreamDependency
+                                             chirdren sharing parent are not ordered with respect to each other
+                                             example  if B and C are the children of A
+                                                         then B and C and D become the children of A
+                                                      map    A           A
+                                                            / \   ==>   /|\
+                                                           B   C       B C D
+
+                              ExclusiveFlag  children of StreamDependency become children of StreamIdentifier
+                                             StreamIdentifier becomes the child of StreamDependency
+                                             example  if B and C are the children of A
+                                                         then B and C become the children of D
+                                                              D becomes the child of A
+                                                      map                A
+                                                             A           |
+                                                            / \   ==>    D
+                                                           B   C        / \
+                                                                       B   C
+                              if stream is reprioritized then children move with stream
+
+                              example  stream is made dependent on own dependencies
+                                       B and C depend on A
+                                       D and E depend on C
+                                       F      depends on D
+                                       if A is made dependent on D
+                                          then D takes the place of A
+                                               all other dependency relationships stay the same
+                                               if reprioritization is exclusive
+                                                  then F becomes dependent on A
+
+                                       map    x                x                x                 x
+                                              |               / \               |                 |
+                                              A              D   A              D                 D
+                                             / \            /   / \            / \                |
+                                            B   C     ==>  F   B   C   ==>    F   A       OR      A
+                                               / \                 |             / \             /|\
+                                              D   E                E            B   C           F B C
+                                              |                                     |               |
+                                              F                                     E               E
+                                                         (intermediate)   (non-exclusive)    (exclusive)
+
+                              if stream1 is the child of stream2 and
+                                 stream1 is removed from tree
+                                 then Weight of stream1 is distributed to children of stream1
+                                      children of stream1 become children of stream2
+
+                              example  map     P
+                                              / \
+                                             A   B
+                                            / \
+                                           C   D
+                                       streams A and B share parent and
+                                               C and D depend on A
+                                       if A and D are blocked
+                                          then C receives all resources of A
+                                       if A is removed from tree
+                                          then A Weight is divided between C and D
+                                       if C and D have same Weight and
+                                          A is removed from tree   and
+                                          D is blocked
+                                          then C receives 1/3 not 1/2 of resources
+
+                              if Stream becomes "closed"
+                                 then endpoint may retain Stream Priority state for a period
+                                                          to avoid giving incorrect Priority to new dependent Streams
+                              if endpoint is under high load
+                                 then endpoint may discard parts of Priority state
+                  Weight  >= 1
+                          <= 256
+                          proportional to resources allocation
+                          bigger means more resources
+                          example  if B has Weight 4  and parent A  and
+                                      C has Weight 12 and parent A  and
+                                      A is blocked                  then B should receive 1/3 of resources compared to C
+
+Frame  = Header || Payload
+
+       Header   +-----------------------------------------------+
+                |                 Length (24)                   |
+                +---------------+---------------+---------------+
+                |   Type (8)    |   Flags (8)   |
+                +-+-------------+---------------+-------------------------------+
+                |R|                  StreamIdentifier (31)                      |
+                +-+-------------------------------------------------------------+
+
+                Length  of Payload
+                        unsigned integer
+                        <= SETTINGS_MAX_FRAME_SIZE
+                        size = 24bit
+
+                Type    determines Frame format and semantics
+                        if receive unknown then ignore and discard Frame
+                        size = 8bit
+
+                Flags   each bit has different use
+                        size = 8bit
+
+                R       = 0
+                        ignored
+                        size = 1bit
+
+                StreamIdentifier  unsigned integer
+                                  if  = 0 then Frame is associated with whole Connection
+                                  if != 0 then Frame is associated with individual stream
+                                  size = 31bit
+
+       DATA  Header  Type = 0
+                     Flags  PADDED      bit 3
+                                        if     set then PadLength and Padding are     present
+                                        if not set then PadLength and Padding are not present
+                            END_STREAM  bit 0
+                                        if set then this is last Frame to send for stream
+
+             Payload  +---------------+
+                      |PadLength?  (8)|
+                      +---------------+-----------------------------------------------+
+                      |                            Data (*)                         ...
+                      +---------------------------------------------------------------+
+                      |                           Padding (*)                       ...
+                      +---------------------------------------------------------------+
+
+                      PadLength  in octets
+                                 size = 8bit
+                                 if >= Frame Header Length then receiver connection error PROTOCOL_ERROR
+                                 may = 0
+
+                      Data       Application data
+                                 may carry HTTP request or response payloads
+                                                payload body RFC7230 Section 3.3
+                                 size = Frame Header Length - size of PadLength - PadLength  octets
+
+                      Padding    has no application semantic value
+                                 may obscure size of messages
+                                 = 0
+                                 if != 0 then receiver may connection error PROTOCOL_ERROR
+
+                      included in FlowControl
+
+             only sent if stream is "open" or "half-closed (remote)"
+             if StreamIdentifier = 0 then send connection error PROTOCOL_ERROR
+
+       HEADERS  Header  Type = 1
+                        Flags  END_STREAM   bit 0
+                                            if set then this is last HeaderBlock in Stream to send
+                                            this Frame may be followed by CONTINUATION frame and still be last HeaderBlock in stream
+
+                               END_HEADERS  bit 2
+                                            if     set then this frame is not followed by CONTINUATION frame
+                                            if not set then this frame is     followed by CONTINUATION frame
+                                            if set and receive frame in this or different stream
+                                               then connection error PROTOCOL_ERROR
+                                            allows HeaderBlock to be logically equivalent to one Frame
+
+                               PADDED       bit 3
+                                            if     set then PadLength and Padding are     present
+                                            if not set then PadLength and Padding are not present
+
+                               PRIORITY     bit 5
+                                            if     set then E and StreamDependency and Weight are     present
+                                            if not set then E and StreamDependency and Weight are not present
+                                            enabled present data is equivalent to PRIORITY Frame
+                                            reprioritizes Stream if bit set and in subsequent HEADERS to firt on Stream
+
+                Payload  +---------------+
+                         |PadLength?  (8)|
+                         +-+-------------+-----------------------------------------------+
+                         |E|                 StreamDependency? (31)                      |
+                         +-+-------------+-----------------------------------------------+
+                         |  Weight? (8)  |
+                         +-+-------------+-----------------------------------------------+
+                         |                   HeaderBlockFragment (*)                   ...
+                         +---------------------------------------------------------------+
+                         |                           Padding (*)                       ...
+                         +---------------------------------------------------------------+
+
+                         PadLength            length of Padding
+                                              in octets
+                                              size = 8bit
+                                              if >= Frame Header Length  then connection error PROTOCOL_ERROR
+
+                         E                    if set then StreamDependency is exclusive
+                                              size = 1bit
+
+                         StreamDependency     identifies the parent of this stream
+                                              size = 31bit
+
+                         Weight               unsigned integer
+                                              Priority Weight of this stream
+                                              add one to obtain value between 1 and 256
+                                              size = 8bit
+
+                sent on stream in "idle"                  or
+                                  "open"                  or
+                                  "reserved (local)"      or
+                                  "half-closed (remote)"
+
+                if HeaderBlock does not fit in one HEADERS
+                   then HeaderBlock is continued in one or more CONTINUATION Frames
+
+                only appears at start or end of stream
+
+                if StreamIdentifier = 0 then send connection error PROTOCOL_ERROR
+
+       PRIORITY  Header  Type = 2
+                         Flags  none
+
+                 Payload  +-+-------------------------------------------------------------+
+                          |E|                   StreamDependency (31)                     |
+                          +-+-------------+-----------------------------------------------+
+                          |   Weight (8)  |
+                          +-+-------------+
+
+                          E                 indicates StreamDependency is exclusive
+                                            size = 1bit
+
+                          StreamDependency  identifies the parent of this stream
+                                            size = 31bit
+
+                          Weight            unsigned integer
+                                            Priority Weight of this stream
+                                            add one to obtain value between 1 and 256
+                                            size = 8bit
+
+                          if size != 5 octets then send stream error FRAME_SIZE_ERROR
+
+                 sent in any stream state
+                 not sent between consecutive Frames with single HeaderBlock
+
+                 if abused causing unnecessary waste of resources
+                    then send stream error ENHANCE_YOUR_CALM
+
+                 if StreamIdentifier = 0 then send connection error PROTOCOL_ERROR
+
+       RST_STREAM  Header  Type = 3
+                           Flags  none
+
+                   Payload  +---------------------------------------------------------------+
+                            |                         ErrorCode (32)                        |
+                            +---------------------------------------------------------------+
+                            unsigned integer
+                            indicates why stream is being terminated
+                            if size != 32bit then send connection error FRAME_SIZE_ERROR
+
+                   immediately terminates stream
+
+                   if received then send no additional Frame in stream except PRIORITY
+                                            RST_STREAM Frame
+                   if sent then it takes time to arrive to peer
+                                sender may receive Frames
+                                       must process received PUSH_PROMISE      Frames
+                                                             FlowControl       Frames
+                                                             HeaderCompression Frames
+
+                   if sent and receive Frame on "closed" stream after more than one RTT
+                      then may send again to deal with misbehaving implementations
+
+                   if received with ErrorCode = REFUSED_STREAM
+                      then stream is being closed prior to any processing having occurred
+                           request sent on this stream are safe to retry
+
+                   if StreamIdentifier = 0 then send connection error PROTOCOL_ERROR
+
+       SETTINGS  Header  Type = 4
+                         Flags  ACK  bit 0
+                                     if set then sender ACKnowledges receiving and applying this Frame
+                                                 Payload is empty  else send connection error FRAME_SIZE_ERROR
+
+                 Payload  has zero or more parameters
+                          each Parameter  +-------------------------------+
+                                          |       Identifier (16)         |
+                                          +-------------------------------+-------------------------------+
+                                          |                        Value (32)                             |
+                                          +---------------------------------------------------------------+
+
+                          Parameters  defined here are all supported by implementations
+                                      are not negotiated
+                                      affects receiver
+                                      last one received is applied
+                                      all processed in appearing order with no other Frame processing in between
+                                      different values for same Parameter can be advertised by each peer
+                                      if receive unknown or unsupported then ignore
+
+                                      SETTINGS_HEADER_TABLE_SIZE  Identifier  = 1
+                                                                  Value       in octets
+                                                                              = 4096  if initial value
+                                                                              max size of HeaderCompression table
+                                                                                       used to decode HeaderBlock
+                                                                  HeaderCompression encoder uses size <= Value
+
+                                      SETTINGS_ENABLE_PUSH  Identifier  = 2
+                                                            Value       = 1  if initial value
+                                                                             indicates server push is permitted
+                                                                        if = 0           then do not send PUSH_PROMISE frame
+                                                                        if != 0 or != 1  then send connection error PROTOCOL_ERROR
+                                                                        if sent = 0     and
+                                                                           ACKnowledged and
+                                                                           receive PUSH_PROMISE  then send connection error PROTOCOL_ERROR
+                                                                        if Client receives SETTINGS_ENABLE_PUSH != 0
+                                                                           then send connection error PROTOCOL_ERROR
+
+                                      SETTINGS_MAX_CONCURRENT_STREAMS  Identifier  = 3
+                                                                       Value       number of streams sender permits receiver to create
+                                                                                   >= 100  is recomended
+                                                                                   0  prevents creation of new streams
+                                                                                      does not prohibit sending PUSH_PROMISE
+
+                                                                       initially there is no limit
+                                                                       only counts Streams in "open"                 or
+                                                                                              "half-closed (local)"  or
+                                                                                              "half-closed (remote)"
+                                                                       if exceeded then send stream error PROTOCOL_ERROR or REFUSED_STREAM
+                                                                       if endpoints wants Value < current concurrent streams
+                                                                          then endpoint closes stream or
+                                                                                        waits for current concurrent streams to go down
+
+                                      SETTINGS_INITIAL_WINDOW_SIZE  Identifier = 4
+                                                                    Value  receiver updates all streams WindowSizeS#s
+                                                                           does not affect WindowSizeCs
+                                                                           in octets
+                                                                           = 2^16-1  if initial value
+                                                                           < 2^31-1  else send connection error FLOW_CONTROL_ERROR
+
+                                      SETTINGS_MAX_FRAME_SIZE  Identifier  = 5
+                                                               Value       size of largest Frame Payload sender is willing to receive
+                                                                           in octets
+                                                                           = 2^14   if initial value
+                                                                           >= 2^14  else connection error PROTOCOL_ERROR
+                                                                           <  2^24  else connection error PROTOCOL_ERROR
+
+                                      SETTINGS_MAX_HEADER_LIST_SIZE  Identifier  = 6
+                                                                     Value       max size of HeaderList sender accepts
+                                                                                 in octets
+                                                                     initially there is no limit
+
+                 must be sent by both endpoints at start          of connection
+                 may  be sent by both endpoints at any other time of connection
+                 always apply to connection
+                 never  apply to single stream
+
+                 if received and ACK not set
+                    then update received Parameters as soon as possible
+                         send immediately SETTINGS Frame with ACK set
+
+                 if sent and does not receive ACKnowledgement and
+                    reasonable amount of time passes      then may send connection error SETTINGS_TIMEOUT
+                 if abused by pointlessly changing it or
+                              setting multiple undefined parameters
+                    then send stream error ENHANCE_YOUR_CALM
+                 if StreamIdentifier != 0                 then send connection error PROTOCOL_ERROR
+                 if badly formed or incomplete            then send connection error PROTOCOL_ERROR
+                 if Frame Length != multiple of 6 octets  then send connection error FRAME_SIZE_ERROR
+
+       PUSH_PROMISE  Header  Type = 5
+                             Flags  END_HEADERS  bit 2
+                                                 if set then this Frame has entire HeaderBlock
+                                                                        is not followed by one or more CONTINUATION Frame
+                                                 if not set then this Frame is followed by one or more CONTINUATION Frame
+                                                 if not set and
+                                                    receive frame without CONTINUATION or
+                                                            frame on different stream
+                                                    then send connection error PROTOCOL_ERROR
+                                    PADDED       bit 3
+                                                 if     set then PadLength and Padding are     present
+                                                 if not set then PadLength and Padding are not present
+
+                     Payload  +---------------+
+                              |PadLength? (8) |
+                              +-+-------------+-----------------------------------------------+
+                              |R|                     PromisedStreamID (31)                   |
+                              +-+-----------------------------+-------------------------------+
+                              |                      HeaderBlockFragment (*)                ...
+                              +---------------------------------------------------------------+
+                              |                           Padding (*)                       ...
+                              +---------------------------------------------------------------+
+
+                              PadLength            length of Padding
+                                                   in octets
+                                                   size = 8bit
+
+                              R                    reserved
+                                                   size = 1bit
+
+                              PromisedStreamID     unsigned integer
+                                                   identifies stream that will be initiated by Server
+                                                   if received and
+                                                      stream PromisedStreamID is not "idle"
+                                                      then send connection error PROTOCOL_ERROR
+                                                   changes promised stream to "reserved"
+                                                   only reserves for later use
+                                                   size = 31bit
+
+                              HeaderBlockFragment  provides additional context for promised stream
+                                                   may modify state of HeaderCompression
+                                                   has ":authority"
+                                                   if ":authority" is not authoritative
+                                                      then send stream error PROTOCOL_ERROR
+                                                   has ":method" that is safe and cacheable else send stream error PROTOCOL_ERROR
+
+                     is not sent by client
+                     only send on stream in "open" or "half-closed (remote)"
+
+                     promised streams may not be used in order promised
+
+                     if not cacheable or   RFC7231 Section 4.2.3
+                        not safe      or   RFC7231 Section 4.2.1
+                        has request body
+                        then reset stream PromisedStreamID with stream error PROTOCOL_ERROR
+
+                     if received then may reject promised streams
+                                                 by returning RST_STREAM with promised StreamIdentifier
+                     if received and ignored then stream state becomes indeterminate
+                     if received in stream in neither "open" nor "half-closed (local)"
+                        then connection error PROTOCOL_ERROR
+                     if StreamIdentifier = 0 then send connection error PROTOCOL_ERROR
+
+       PING  Header  Type = 6
+                     Flags  ACK  bit 0
+
+             Payload  +---------------------------------------------------------------+
+                      |                                                               |
+                      |                       OpaqueData (64)                         |
+                      |                                                               |
+                      +---------------------------------------------------------------+
+
+                      OpaqueData  has any value sender wants
+                                  used in any fashion by sender
+                                  size = 64bit
+
+             if received with ACK flag not set
+                then send PING frame with ACK flag set
+                                          identical Payload
+                                          may higher priority than any other frame
+             RTT  round trip time
+                  = time it takes for PING with ACK not set to go +
+                    time it takes for PING with ACK     set to come
+
+             determines whether idle connection is functional
+             sent from any endpoint
+
+             if StreamIdentifier != 0 then send connection error PROTOCOL_ERROR
+             if Frame Length != 8     then send connection error FRAME_SIZE_ERROR
+
+       GOAWAY  Header  Type = 7
+                       Flags  none
+
+               Payload  +-+-------------------------------------------------------------+
+                        |R|                     LastStreamID (31)                       |
+                        +-+-------------------------------------------------------------+
+                        |                       ErrorCode (32)                          |
+                        +---------------------------------------------------------------+
+                        |                    AdditionalDebugData (*)                    |
+                        +---------------------------------------------------------------+
+
+                        LastStreamID         unsigned integer
+                                             highest stream sender might have taken some action on
+                                                                         yet  take       action on
+                                                            initiated by receiver
+                                             = 0 if no streams data was processed
+                                             size = 31bit
+
+                        ErrorCode            reason for closing connection
+                                             size = 32bit
+
+                        AdditionalDebugData  for diagnostic purposes only
+                                             carries no semantic value
+                                             may have security or private data
+                                             if contains logged or otherwise persistently stored data
+                                                then do adequate safeguards to prevent unauthorized access
+
+               use to initiate shutdown of connection or
+                      signal serious error conditions
+
+                      gracefully stop accepting new streams while finishing processing established streams
+
+               applies to connection
+               does not apply to specific stream
+               if StreamIdentifier != 0 then send connection error PROTOCOL_ERROR
+
+               may     send before closing connection so peer knows if stream is partially processed
+               may not send before closing connection if peer is misbehaving
+
+               if sent then ignore new streams initiated by receiver
+                                               with StreamIdentifier > LastStreamID
+
+               if sent GOAWAY and
+                  sent data on stream with StreamIdentifier > LastStreamID
+                  then that stream is ignored
+
+               if received then do not open new streams on connection
+                                may do new connection for new streams
+
+               if received and connection has no more uses
+                  then may send GOAWAY frame before terminating connection
+
+               if GOAWAY was used   and
+                  Connection closed and
+                  stream with StreamIdentifier <= LastStreamID was not closed
+                  then reattempting requests              is not possible
+                                    transactions          is not possible
+                                    any protocol activity is not possible
+                                    idempotent actions    is     possible
+                                    HTTP GET,PUT,DELETE   is     possible
+
+               if GOAWAY was used   and
+                  Connection closed and
+                  stream with StreamIdentifier > LastStreamID was not closed
+                  then any protocol activity may be safely retried using new connection
+
+               if sent then may maintaining connection "open" until all streams complete
+
+               if endpoint wants to do gracefull connection shut down
+                  then send GOAWAY with ErrorCode    = NO_ERROR
+                                        LastStreamID = 2^31-1
+                       wait at least one RTT
+                       if no error hapens then send GOAWAY with ErrorCode    = NO_ERROR
+                                                                LastStreamID = real stream
+
+               if sent GOAWAY with ErrorCode NO_ERROR and
+                  new ErrorCode happens
+                  then may send GOAWAY with new ErrorCode
+                                            LastStreamID <= LastStreamID of first GOAWAY
+                                                         indicating which streams could have been acted upon
+
+               if connection terminates without GOAWAY frame
+                  then LastStreamID = 2^31-1
+
+       WINDOW_UPDATE  Header  Type = 8
+                              Flags  none
+
+                      Payload  +-+-------------------------------------------------------------+
+                               |R|                WindowSizeIncrement (31)                     |
+                               +-+-------------------------------------------------------------+
+
+                               R                    reserved
+                                                    size = 1bit
+
+                               WindowSizeIncrement  unsigned integer
+                                                    in octets
+                                                    > 0
+                                                    < 2^31
+                                                    if = 0 then stream error PROTOCOL_ERROR
+                                                    size = 31bit
+                               if size != 4 then send connection error FRAME_SIZE_ERROR
+
+                      FlowControl  Frames are of Type DATA
+                                                      future Extensions may add new Types
+
+                                   does not apply to AllHops  example  Server to midlebox1 to midlebox2 to Client
+                                   applies to each   OneHop   example  Client    to midlebox2  or
+                                                                       midlebox1 to midlebox2
+                                   uses WindowSize  integer
+                                                    can be negative
+                                                    in octets
+                                                    = 65535 if new connection or stream
+
+                                   each enpoint has for each Connection WindowSizeCs for sending
+                                                                        WindowSizeCr for receiving
+
+                                                             Stream     WindowSizeS#s for sending
+                                                                        WindowSizeS#r for receiving
+
+                                   if receive FlowControl Frame with StreamIdentifier = 3
+                                                                     Length > WindowSizeS3r
+                                      then either 1  process Frame
+                                                     update WindowSizeS3r = WindowSizeS3r - Frame Length
+                                                            WindowSizeCr  = WindowSizeCr  - Frame Length
+                                                     receiving Frame Length > WindowSizeS3r  may happen after sending small SETTINGS_INITIAL_WINDOW_SIZE
+                                                  2  send connection error FLOW_CONTROL_ERROR
+
+                                   if receive FlowControl Frame with StreamIdentifier = 2
+                                                                     Length <= WindowSizeS2r
+                                      then process Frame
+                                           update WindowSizeS2r = WindowSizeS2r - Frame Length
+                                                  WindowSizeCr  = WindowSizeCr  - Frame Length
+
+                                   FlowControl Frame can not have StreamIdentifier = 0
+
+                                   if want to send FlowControl Frame with StreamIdentifier = 5
+                                                                          Length > WindowSizeS5s
+                                      then do not send Frame
+
+                                   if want to send FlowControl Frame with StreamIdentifier = 4
+                                                                          Length <= WindowSizeS4s
+                                      then send Frame
+                                           update WindowSizeS4s = WindowSizeS4s - Frame Length
+                                                  WindowSizeCs  = WindowSizeCs  - Frame Length
+
+                                   if receive FlowControl Frame and detect connection error then do not apply FlowControl
+                                   if receive FlowControl Frame and detect stream     error then        apply FlowControl
+
+                                   if receive WINDOW_UPDATE with StreamIdentifier = 0
+                                      then update WindowSizeCr  = WindowSizeCr  + WindowSizeIncrement
+
+                                   if receive WINDOW_UPDATE with StreamIdentifier = 1
+                                      then update WindowSizeS1r = WindowSizeS1r + WindowSizeIncrement
+
+                                   if any WindowSize >= 2^31 then send either GOAWAY     with FLOW_CONTROL_ERROR
+                                                                              RST_STREAM with FLOW_CONTROL_ERROR
+
+                                   if connection is new         and
+                                      client sends 60000 octets and
+                                      server sends SETTINGS_INITIAL_WINDOW_SIZE = 16000 octets
+                                      then client calcualtes WindowSizeS1s = 65535                         when connection is new
+                                                             WindowSizeS1s = 65535-60000          = 5535   when client sends 60000 octets
+                                                             WindowSizeS1s = 5535 + (16000-65535) =-44000  when server sends SETTINGS_INITIAL_WINDOW_SIZE
+
+                                   implementations manage how to avoid head-of-line blocking
+                                                                       large bandwidth*delay problems RFC7323
+
+                                   SETTINGS can change WindowSize for streams in "open" or "half-closed (remote)"
+
+                                   if abused causing unnecessary waste of resources
+                                      then send stream error ENHANCE_YOUR_CALM
+
+       CONTINUATION  Header  Type = 9
+                             Flags  END_HEADERS  bit 2
+                                                 if     set then this Frame ends HeaderBlock
+                                                 if not set and next received Frame Type != CONTINUATION   or
+                                                                                    is from another stream
+                                                    then send connection error PROTOCOL_ERROR
+
+                     Payload  +---------------------------------------------------------------+
+                              |                     HeaderBlockFragment (*)                 ...
+                              +---------------------------------------------------------------+
+
+                     continues sequence of HeaderBlock fragments
+                     any number of CONTINUATION frames can be sent
+
+                     if received and previous Frame had no HEADERS or
+                                                           PUSH_PROMISE or
+                                                           CONTINUATION with END_HEADERS not set
+                        then send connection error PROTOCOL_ERROR
+
+                     if StreamIdentifier = 0 then send connection error PROTOCOL_ERROR
+
+       if size > SETTINGS_MAX_FRAME_SIZE  or
+          size > max limit for Frame type or
+          size < min limit for Frame type then send error FRAME_SIZE_ERROR
+
+       if FRAME_SIZE_ERROR for Frame with HEADERS               or
+                                          PUSH_PROMISE          or
+                                          CONTINUATION          or
+                                          SETTINGS              or
+                                          StreamIdentifier = 0  then Connection error
+
+       sending big Frame may delay sending time-sensitive Frames example RST_STREAM     or
+                                                                         WINDOW_UPDATE  or
+                                                                         PRIORITY
+
+       if endpoints do not maintain synchronized view of connection state
+          then communication will fail
+
+       if abused by receiving many small or empty
+          then send stream error ENHANCE_YOUR_CALM
+
+Error  class  ConnectionError  if entire connection becomes unusable
+              StreamError      if one stream becomes unusable
+
+       ConnectionError  for error preventing further processing of frame layer or
+                                  corrupting any connection state
+                        if encountered then may send Frame Type GOAWAY
+                                                           StreamIdentifier of last successful Stream received
+                                                           ErrorCode indicating why connection is terminating
+                                            close TCP connection
+                        endpoint may end connection at any time
+                                     treat StreamError as ConnectionError
+
+       StreamError      does not affect other Streams
+                        if detected then send Frame Type RST_STREAM
+                                                    StreamIdentifier where error occurred
+                                                    ErrorCode
+       ErrorCode  size = 32bit
+                  if unknown or unsupported then trigger no special behavior
+                                                 may treate as INTERNAL_ERROR
+                  = 0   NO_ERROR             associated condition is not a result of error
+                  =                          may be in GOAWAY indicating graceful shutdown of connection
+                  = 1   PROTOCOL_ERROR       endpoint detected unspecific protocol error
+                  =                          use if specific ErrorCode is not available
+                  = 2   INTERNAL_ERROR       sender encountered unexpected internal error
+                  = 3   FLOW_CONTROL_ERROR   sender detected peer violated flow-control protocol
+                  = 4   SETTINGS_TIMEOUT     sender sent SETTINGS frame and received no response in time
+                  = 5   STREAM_CLOSED        sender received frame on "half-closed" stream
+                  = 6   FRAME_SIZE_ERROR     sender received frame with invalid size
+                  = 7   REFUSED_STREAM       sender refused stream prior to performing application processing
+                  = 8   CANCEL               sender indicates stream is no longer needed
+                  = 9   COMPRESSION_ERROR    sender is unable to maintain HeaderCompression context for connection
+                  = 10  CONNECT_ERROR        connection established in response to CONNECT was reset or abnormally closed
+                  = 11  ENHANCE_YOUR_CALM    sender detected peer might be generating excessive load
+                  = 12  INADEQUATE_SECURITY  underlying transport properties do not meet minimum security requirements
+                  = 13  HTTP_1_1_REQUIRED    sender requires HTTP/1.1 instead of HTTP/2
+
+all request and response semantics are preserved from HTTP/1.1 into HTTP/2
+
+specification and requirements of HTTP/1.1 Semantics and Content RFC7231
+                                  Conditional Requests           RFC7232
+                                  Range Requests                 RFC7233
+                                  Caching                        RFC7234
+                                  Authentication                 RFC7235
+                                  portions of Message Syntax and Routing RFC7230
+                                           such as HTTP and HTTPS URI schemes
+                                  are applicable in HTTP/2
+
+HTTP  exchange  consumes single stream
+                Client request   on new stream
+                                 starts with HEADERS
+                                             "open"
+                                 ends   with Frame with END_STREAM set
+                                             "half-closed (local)"  for Client
+                                             "half-closed (remote)" for Server
+                Server response  on same stream
+                                 starts with HEADERS
+                                 ends   with Frame END_STREAM set
+                                             "closed"
+                                 completes after Server sends    or
+                                                 client receives
+                                                 Frame END_STREAM set and any CONTINUATION frames
+
+                if client has not finished sending full request and
+                   server response does not depend on the rest to receive
+                   then server may send complete response for example Frame with END_STREAM set
+                                        RST_STREAM with error NO_ERROR
+                                        then Client does not discard responses because NO_ERROR
+                                                    may      discard responses because other reasons
+
+                does not support upgrade to another protocol
+
+      message  .  one HEADERS followed by zero or more CONTINUATION with
+                  HeadeFields RFC7230 Section 3.2
+
+               .  zero or more DATA with
+                  payload body
+
+               .  only for HTML response
+                  zero or more HEADERS each followed by zero or more CONTINUATION with
+                  informational (1xx) HTTP responses RFC7230 Section 3.2
+                                                     RFC7231 Section 6.2
+
+               .  one HEADERS followed by zero or more CONTINUATION with
+                  Trailer RFC7230 Section 4.1.2
+
+      if receive final (non-informational) status code and
+                 HEADERS END_STREAM is not set
+         then treat as malformed
+
+      do not use "chunked" transfer encoding           RFC7230 Section 4.1
+                 101 (Switching Protocols) status code RFC7231 Section 6.2.2
+
+      HeaderField        series of key-value pairs
+                         list at https://www.iana.org/assignments/message-headers
+                         Name  strings of ASCII characters
+                               compared in case-insensitive fashion
+                               if uppercase in HTTP request or response
+                                  then treat as malformed
+                         TE HeaderField may be present in request only with value "trailers"
+                         do not use Connection HeaderField to indicate connection-specific HeaderFields
+                         if message has connection-specific HeaderFields
+                            then treat as malformed
+                         if transforming HTTP/1.x message to HTTP/2
+                            then remove HeaderFields nominated by Connection HeaderField
+                                        Connection HeaderField
+                                 may remove even if not nominated by Connection HeaderField
+                                                 Keep-Alive
+                                                 Proxy-Connection
+                                                 Transfer-Encoding
+                                                 Upgrade
+                         Cookie  uses ";" to delimit cookie-pairs or "crumbs"
+                                 does not follow list construction rules in HTTP RFC7230 Section 3.2.2
+                                 may be split into separate HeaderField each with one or more cookie-pairs
+                                 if finish HeaderDeCompression and
+                                    there are multiple Cookie
+                                    then concatenate all Cookie into single octet string
+                                                     using 0x3B 0x20 = "; "
+                                                     then pass to non-HTTP/2 context like HTTP/1.1 connection or
+                                                                                          generic HTTP server application
+                                                     example  cookie: a=b
+                                                              cookie: c=d
+                                                              cookie: e=f
+                                                              concatenates into
+                                                              cookie: a=b; c=d; e=f
+                         if HTTP request or response has payload body
+                            then content-length HeaderField may be used
+                         if response has no payload RFC7230 Section 3.3.2 and
+                                         no content in all DATA Frames
+                            then response can have non-zero content-length HeaderField
+                         if content-length HeaderField value != sum of DATA frame payload lengths forming body
+                            then treat as malformed
+
+      PseudoHeaderField  != HeaderField
+                         begins with ':' character (ASCII 0x3a)
+                         has target URI
+                             method of request
+                             status code for response
+                         are not in trailing HeaderFields
+                         if defined for HTTP requests  then do not put in HTTP responses
+                         if defined for HTTP responses then do not put in HTTP requests
+                         if in request or response and is undefined or invalid  then treat as malformed
+                         if in request or response and is after HeaderField     then treat as malformed
+                         only use the ones defined here
+                         all HTTP requests  have at least one valid ":method" and ":scheme" and ":path"
+                                                                    else treat as malformed
+                                  responses have one ":status"      else treat as malformed
+
+                         request   ":method"     has HTTP method RFC7231 Section 4
+                                   ":scheme"     has scheme portion of target URI RFC3986 Section 3.1
+                                                 not restricted to "http" and "https" schemed URIs
+                                                 proxy or gateway can translate non-HTTP schemes
+                                                                      use HTTP to interact with non-HTTP services
+                                   ":authority"  has authority portion of target URI RFC3986 Section 3.2
+                                                     no "userinfo" subcomponent for "http" or "https" schemed URIs
+                                                 if translating HTTP/1.1 request with target in origin   form
+                                                                                                asterisk form RFC7230 Section 5.3
+                                                    then ":authority" is omitted
+                                                 if Client generates HTTP/2 requests directly
+                                                    then should use ":authority" instead of Host HeaderField
+                                                 if intermediary converts HTTP/2 request to HTTP/1.1 and
+                                                    request has no Host HeaderField
+                                                    then create Host HeaderField by copying ":authority" value
+                                   ":path"       has path and query parts of target URI
+                                                     "path-absolute" production
+                                                     optionally '?' character followed by "query" production RFC3986 Sections 3.3 and 3.4
+                                                     '*' for request in asterisk form
+                                                 if "http" or "https" URI has no path component
+                                                     then ":path" = '/'
+                                                 if "http" or "https" URI has no path component and
+                                                    is an OPTIONS request
+                                                    then ":path" = '*' RFC7230 Section 5.3.4
+
+                                   HTTP/2 has no way to carry version identifier of HTTP/1.1 request line
+
+                         response  ":status"  has HTTP status code field RFC7231 Section 6
+                                   HTTP/2 has no way to carry version or reason phrase of HTTP/1.1 status line
+
+      Malformed  if detected then send stream error PROTOCOL_ERROR
+                 if detected by intermediary then intermediary does not forward message  for example any intermediary not acting as tunnel
+                 if detected in requests by server then server may send response before closing or resetting stream
+                 if detected in response by Client then Client does not accept response
+
+      Padding  does not replace TLS padding
+               only slows attacker by increasing number of frames to observe
+               provides little protection if using random padding with predictable distribution
+               if plaintext is padded to fixed size and
+                  attacker makes payload cross the fixed size
+                  then plaintext information will be exposed
+               intermediaries may retain padding of DATA
+                                  remove padding of HEADERS
+                                                    PUSH_PROMISE
+                                         to improve data protection
+
+HTTP/1.1equivalentHTTP/2  HTTP GET request has request HeaderFields
+                                               no payload body
+                          example  HEADERS frame has END_HEADERS and END_STREAM flags set
+                                   no CONTINUATION frames sent
+                                   equivalence  GET /resource HTTP/1.1       HEADERS
+                                                Host: example.org       ==>    + END_STREAM
+                                                Accept: image/jpeg             + END_HEADERS
+                                                                                 :method = GET
+                                                                                 :scheme = https
+                                                                                 :path = /resource
+                                                                                 host = example.org
+                                                                                 accept = image/jpeg
+
+                          example  HTTP response has only response HeaderFields
+                                                 sent as HEADERS frame
+                                                      followed by zero or more CONTINUATION frames
+
+                                   equivalence  HTTP/1.1 304 Not Modified       HEADERS
+                                                ETag: "xyzzy"              ==>    + END_STREAM
+                                                Expires: Thu, 23 Jan ...          + END_HEADERS
+                                                                                    :status = 304
+                                                                                    etag = "xyzzy"
+                                                                                    expires = Thu, 23 Jan ...
+
+                          example  HTTP POST request has HeaderFields and payload data
+                                                     sent as one HEADERS frame
+                                                          followed by zero or more CONTINUATION frames with request header fields
+                                                          followed by one or more DATA frames
+                                                                      last CONTINUATION or HEADERS END_HEADERS set and
+                                                                      last DATA                    END_STREAM  set
+
+                                   equivalence  POST /resource HTTP/1.1        HEADERS
+                                                Host: example.org         ==>    - END_STREAM
+                                                Content-Type: image/jpeg         - END_HEADERS
+                                                Content-Length: 123                :method = POST
+                                                                                   :path = /resource
+                                                {binary data}                      :scheme = https
+
+                                                                               CONTINUATION
+                                                                                 + END_HEADERS
+                                                                                   content-type = image/jpeg
+                                                                                   host = example.org
+                                                                                   content-length = 123
+
+                                                                               DATA
+                                                                                 + END_STREAM
+                                                                               {binary data}
+
+                          example  HTTP response has HeaderFields and payload data
+                                                 sent as one HEADERS frame
+                                                      followed by zero or more CONTINUATION frames
+                                                      followed by one or more DATA frames
+                                                                  last DATA END_STREAM set
+
+                                   equivalence  HTTP/1.1 200 OK                HEADERS
+                                                Content-Type: image/jpeg  ==>    - END_STREAM
+                                                Content-Length: 123              + END_HEADERS
+                                                                                   :status = 200
+                                                {binary data}                      content-type = image/jpeg
+                                                                                   content-length = 123
+
+                                                                               DATA
+                                                                                 + END_STREAM
+                                                                               {binary data}
+
+                          informational response 1xx status code other than 101 is sent as HEADERS frame
+                                                                                        followed by zero or more CONTINUATION frames
+                          trailing HeaderFields are sent as HEADERS frame with END_STREAM set
+                                                         after sending request or response HeaderBlock
+                                                                       all DATA frames
+
+                          example  100 (Continue) status code is sent for request with "100-continue" token Expect HeaderField
+                                   trailing HeaderField       is sent after
+
+                                   equivalence  HTTP/1.1 100 Continue            HEADERS
+                                                Extension-Field: bar        ==>    - END_STREAM
+                                                                                   + END_HEADERS
+                                                                                     :status = 100
+                                                                                     extension-field = bar
+
+                                                HTTP/1.1 200 OK                  HEADERS
+                                                Content-Type: image/jpeg    ==>    - END_STREAM
+                                                Transfer-Encoding: chunked         + END_HEADERS
+                                                Trailer: Foo                         :status = 200
+                                                                                     content-length = 123
+                                                123                                  content-type = image/jpeg
+                                                {binary data}                        trailer = Foo
+                                                0
+                                                Foo: bar                         DATA
+                                                                                   - END_STREAM
+                                                                                 {binary data}
+
+                                                                                 HEADERS
+                                                                                   + END_STREAM
+                                                                                   + END_HEADERS
+                                                                                     foo = bar
+ServerPush  used by server by sending PUSH_PROMISE
+
+            steps  unoptimized  Client initiates request1
+                                Server sends response1
+                                Client sends request2
+                                Server sends response2
+                                Client sends request3
+                                Server sends response3
+
+                   optimized1  Client initiates request1
+                               Server sends response1
+                                            PUSH_PROMISE
+                                            response2
+                                            response3
+
+                   optimized2  Client initiates request1
+                               Server sends PUSH_PROMISE
+                                            response1
+                                            response2
+                                            response3
+
+                   response1 has data making Client request again
+                                      for example links to images
+                   optimized1 PUSH_PROMISE may stop Client from sending request2 and request3
+                   optimized2 PUSH_PROMISE    stops Client from sending request2 and request3
+
+            negotiated independently for each hop between Server and Client
+
+            Request   is PUSH_PROMISE Frame followed by zero or more CONTINUATION Frames
+                      always associated with  explicit request from client
+                      sent on stream    where explicit request from client happened
+                      frames are interspersed with response frames
+
+            Response  uses stream promised by PUSH_PROMISE
+                      transmits HTTP response
+                      client may not requests for the promised response until promised stream has closed
+
+                      if client does not want or
+                         server takes too long to begin sending
+                         then client sends RST_STREAM with StreamIdentifier = PromisedStreamID and
+                                                           either CANCEL
+                                                                  REFUSED_STREAM
+                      if received by Client
+                         then Client validates either server is authoritative
+                                                      proxy is configured for corresponding request
+                                               example  if server has certificate "example.com" DNS-ID or Common Name
+                                                           then server is not permitted to respond for "https://www.example.org/doc"
+
+                      if client accepts PUSH_PROMISE and
+                                limits number of streams in "reserved (remote)" and
+                                limit it reached
+                         then client sends stream error ENHANCE_YOUR_CALM
+
+                      stream begins with HEADERS        changing stream into "half-closed (remote)" for server
+                                                                             "half-closed (local)"  for client
+                             ends   with END_STREAM set changing stream into "closed"
+
+                      client never sends frame with END_STREAM set
+
+                      if is cacheable  and               RFC7234 Section 3
+                         client implements HTTP cache
+                         then client may store response
+
+                      if "no-cache" cache response directive is present and
+                         response stream PromisedStreamID is still open
+                         then response is successfully validated on Server
+
+                      if not cacheable then HTTP cache does not store response
+                                            may be made available to application separately
+
+                      if received by intermediary
+                         then intermediary chosses independently of actions taken by server
+                                                   to forward it or not      to client
+                                                   to make additional pushes to client
+                      if server receives then connection error PROTOCOL_ERROR
+
+                      Cacheability  is possible
+                                    depends on Cache-Control HeaderField
+                                    has issues if single server hosts multiple clients
+                                               example  server offers parts of URI space
+                                                                      to multiple users
+                                    if clients have no authority over representations of resources
+                                       then clients cant push representations of resources
+                                    not used if server is not authoritative
+
+CONNECT  in HTTP/1.x  RFC7231 Section 4.3.6
+                      converts connection into tunnel to remote host
+                      used with HTTP proxies to establish TLS session with origin server
+                           to interact with "https" resources
+
+         in HTTP/2    establishes tunnel over one stream to remote host
+                      ":method"    = "CONNECT"
+                      ":scheme"    omitted
+                      ":path"      omitted
+                      ":authority" has host and port to connect to
+                                       authority-form of request-target of CONNECT requests RFC7230 Section 5.3
+                      if not following definition then treat as malformed
+
+         proxy  steps  establishes TCP connection with server in ":authority"
+                       sends client HEADERS with 2xx series status code  RFC7231 Section 4.3.6
+                       each peer sends initial HEADERS
+                       all subsecuent DATA frames correspond to data sent on TCP
+
+                transmits client Payload DATA to TCP server
+                assembles server TCP data into DATA for client
+                if receives DATA with END_STREAM set
+                   then proxy sends last TCP segment with FIN set
+                if receives TCP segment with FIN set
+                   then proxy sends DATA frame with END_STREAM set
+                if receives Frames other than DATA
+                                              RST_STREAM
+                                              WINDOW_UPDATE
+                                              PRIORITY
+                   then sends stream error RST_STREAM
+                if detects TCP connection error or
+                   receives TCP segment with RST set
+                   then sends stream error CONNECT_ERROR
+                if detects HTTP/2 stream or connection error
+                   then sends TCP segment with RST set
+                if close stream of peer
+                   then TCP connection may remain in TIME_WAIT state
+                                           maintain resources
+                does not rely only on SETTINGS_MAX_CONCURRENT_STREAMS to limit resources consumed
+
+         may be abused to create disproportionate load on proxy
+         peer stream creation is less expensive than proxy TCP connection creation and maintenance
+
+         if client receives END_STREAM set
+            then client sends DATA with END_STREAM set
+         DATA frame with END_STREAM set is equivalent to TCP FIN bit
+         final TCP segment may be empty
+         final DATA frame  may be empty
+         TCP connection may be closed by either peer
+         TCP connection error is signaled with RST_STREAM
+
+Connection  is persistent
+            Servers may maintain open for as long as possible
+                        terminate if idle
+            clients may open multiple to same IP and port
+                                      using different SNI
+                                      to provide different TLS client certificates
+                        avoid multiple with same configuration
+                        avoid multiple to same host and port pair
+                                               derived from URI               or
+                                                            configured proxy  or
+                                                            alternative service RFC7838
+
+                        not close until no further communication necessary
+                                        user navigates away from web page
+                                        server closes connection
+                        replace Connection near exhaustion of streamidentifier
+                                Connection with errors
+                                to refresh TLS key
+
+            may have multiple concurrently open Streams
+                     either endpoint interleaving Frames from multiple Streams
+
+            has HeaderCompression   context
+                HeaderDeCompression context
+            if HeaderDeCompression error then send connection error COMPRESSION_ERROR
+
+            Reuse  if requests have multiple different URI authority components
+                   if origin server is authoritative
+                   if IP addresses resolve to same host in URI and using TCP without TLS
+                   if host in URI has valid certificate        and using TCP with    TLS
+                   if origin server certificate has multiple "subjectAltName" or names with wildcards
+                                                             one of which is valid for authority in URI
+                   example  server has certificate with "subjectAltName" of "*.example.com"
+                                   may Reuse Connection for requests to "https://a.example.com/" and
+                                                                        "https://b.example.com/"
+                   for multiple origin servers requests may go to wrong origin server
+                   example  if middlebox uses SNI extension to select origin server and
+                                         does TLS termination
+                               then clients may send confidential data to wrong server even when server is authoritative
+                   if not wanted by server and
+                      server receives request
+                      then server sends 421 (Misdirected Request) status code
+                   for all client requests sent via proxy
+
+421 (Misdirected Request) Status Code
+
+   indicates that request to server has no response
+   may be sent by server not configured to respond to request with specific scheme and authority in URI
+   is not generated by proxies
+   cacheable by default
+             may be disabled by method definition or
+                                explicit cache controls RFC7234 Section 4.2.2
+   if client sends request and
+             receives 421 Status Code
+      then client may retry request on different connection
+
+
+usingTLS  may follow general guidance RFC7525
+          version >= 1.2
+          support SNI
+          clients indicate target domain name
+          disable TLS 1.2 compression
+          disable TLS 1.2 renegotiation
+          if server wants to change to other protocol that supports renegotiation
+             then server sends error HTTP_1_1_REQUIRED
+
+          support key size >=  224bit for ECDHE  else send connection error INADEQUATE_SECURITY
+                           >= 2048bit for DHE    else send connection error INADEQUATE_SECURITY
+                           <= 4096bit for DHE    for client
+
+          support TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 with P-256
+          endpoint may      do connection error INADEQUATE_SECURITY  if ciphersuite     in BlackList is negotiated
+          endpoint must not do connection error INADEQUATE_SECURITY  if ciphersuite not in BlackList is negotiated
+          if client supports HTTP/1.1 and HTTP/2
+             then client may advertise ciphersuites in BlackList
+          BlackList  RFC7540 Appendix A
+          if attacker can control confidential data transported over TLS
+             then do not compress confidential data
+          if separate compression dictionaries are not used for each source of confidential data
+             then do not compressed confidential data
+
+ServerAuthority  determine if server is authoritative of response
+                 uses definition in RFC7230 Section 9.1
+                      local name resolution                           for "http"  URI scheme
+                      authenticated server identity RFC2818 Section 3 for "https" scheme
+
+Extensions  are within the scope of one HTTP/2 connection
+            applies to protocol elements defined here
+            does not affect existing options for extending HTTP
+            may use new Frame Type          or
+                    new SETTINGS Parameter  or
+                    new ErrorCode
+                    without prior arrangement or negotiation
+
+            implementations ignore unknown or unsupported values in all extensible protocol elements
+                            discard frames with unknown or unsupported types
+
+            if Extension Frames appear in middle of HeaderBlock
+               then send connection error PROTOCOL_ERROR
+
+            if Extension changes semantics of existing protocol components
+               then negotiate Extension before use
+
+            for negotiating use of Extension there is no specific method
+                                             SETTINGS Parameter may be used
+                                                                defaults to disabled
+
+CrossProtocolAttack  attacker makes client start transaction in one protocol toward server using different protocol
+                                    transaction valid in second protocol
+                     avoided by using TLS handshake with ALPN identifier
+                     may happen if not using TLS and
+                                   server ignores parts of HTTP/1.1 request with Upgrade header
+                                                                                 client connection preface
+
+IntermediaryEncapsulationAttack  if carriage return  CR  ASCII 0xd  or
+                                    line feed        LF  ASCII 0xa  or
+                                    zero character   NUL ASCII 0x0  are translated verbatim
+                                    then attacker may exploit them
+
+                                 if request or response has invalid HeaderField name
+                                    then treat as malformed
+                                         intermediary does no translation from HTTP/2 to HTTP/1.1
+
+                                 if request or response has invalid character in HeaderField value
+                                    then treat as malformed
+
+                                 valid characters are defined by "field-content" ABNF rule RFC7230 Section 3.2
+
+Privacy  observer may locate enpoint using PING response latency
+                      fingerprinting endpoints
+                      correlate actions of endpoints over time
+                                handling of settings values
+                                FlowControl managment
+                                priorities allocation to streams
+                                timing of reactions
+                                reusing connections for different origins
+    </pre>
+</body>
+</html>

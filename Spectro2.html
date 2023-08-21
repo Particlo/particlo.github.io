@@ -1,0 +1,1793 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Wavelet Convolution</title>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/jpg" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=">
+</head>
+<body>
+<script>
+    window.onload = start;
+
+    var gl = null;
+    var cnvs0 = null;
+    var shdMtx = new Float32Array(4*4);
+    var resizeWindow;
+    var ext0;
+    var ext1;
+    var ext2;
+    var vxSh1a;
+    var frSh1d;
+    var frSh1e;
+    var frSh1f;
+    var shaderCreator
+
+    var shaderP1a;
+    var shdVtx1a ;
+    var shdMtx1a ;
+    var shdTex1a0;
+    var shdTex1a1;
+
+    var shaderP1b;
+    var shdVtx1b ;
+    var shdMtx1b ;
+    var shdTex1b ;
+
+    var shaderP1c;
+    var shdVtx1c ;
+    var shdMtx1c ;
+    var shdTex1c ;
+
+    var iniComboShdr1;
+    var shaderP1d;
+    var shdVtx1d ;
+    var shdMtx1d ;
+    var shdTex1d ;
+    var shaderP1e;
+    var shdVtx1e ;
+    var shdMtx1e ;
+    var shdTex1e0;
+    var shdTex1e1;
+    var shaderP1f;
+    var shdVtx1f ;
+    var shdMtx1f ;
+    var shdTex1f ;
+
+    var meshBuff;
+    var textMode;
+    var texCreator;
+    var frameBuffCreator;
+
+    function start()
+    {
+        document.body.style.touchAction = "none";
+        document.body.style.margin = "0px";
+        document.body.style.fontFamily = "consolas";
+        document.body.style.background = "rgb(229,229,229)";
+
+        startWebGL();
+        interface1();
+ 
+        resizeWindow = function()
+        {
+            rndRqst1();
+        }
+        window.onresize = resizeWindow;
+    }
+    function startWebGL()
+    {
+        cnvs0 = document.createElement("canvas");
+        //cnvs0.style.position = "absolute";
+        //document.body.appendChild(cnvs0);
+
+        gl = cnvs0.getContext("webgl",{ alpha: false,
+                                        antialias: false,
+                                        depth: true,
+                                        stencil: false,
+                                        premultipliedAlpha: true,
+                                        //preserveDrawingBuffer: false,
+                                        //failIfMajorPerformanceCaveat: false
+                                        });
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.disable(gl.BLEND);
+        gl.depthFunc(gl.GEQUAL);
+        gl.enable(gl.DEPTH_TEST);
+        ext0 = gl.getExtension('OES_texture_float');
+        ext1 = gl.getExtension('WEBGL_color_buffer_float');
+        ext2 = gl.getExtension('EXT_float_blend');
+
+        vxSh1a =
+        `precision highp float;
+        attribute float vtx;
+        varying vec2 uv;
+        void main()
+        {
+            vec4 a = vec4(-1.,1.,1.,1.);
+            if(vtx == .50){a.x = 3.;}
+            if(vtx == .75){a.y =-3.;}
+            uv = a.xy*.5+.5;
+            gl_Position = a*.5;
+        }`;
+        var frSh1a =
+        `precision highp float;
+        uniform sampler2D tex0;
+        uniform sampler2D tex1;
+        uniform mat4 mtx;
+        varying vec2 uv;
+        void main()
+        {
+            vec2 u = vec2(texture2D(tex1,uv).x,uv.y);                //interlace data    
+            gl_FragColor = texture2D(tex0,u).xyzw*sqrt(mtx[0].y);    //.x=real .y=imagin  .z=real .w=imagin   
+        }`;
+        var frSh1b =
+        `precision highp float;
+        uniform sampler2D tex;
+        uniform mat4 mtx;
+        varying vec2 uv;
+        void main()
+        {
+            float x  = uv.x*mtx[0].x;
+            float p1 = mtx[3].x;
+            float p2 = mtx[3].y;
+            float p3 = mtx[3].z;
+            float sg = mtx[3].w;
+
+            float v = mod(x,p1) + floor(x*p3)*p2;
+
+            vec2 u1 = vec2((v   )*mtx[0].y,uv.y);
+            vec2 u2 = vec2((v+p1)*mtx[0].y,uv.y);
+
+            vec4 t1 = texture2D(tex,u1).xyzw;                      //.x=real .y=imagin  .z=real .w=imagin
+            vec4 t2 = texture2D(tex,u2).xyzw;                      //.x=real .y=imagin  .z=real .w=imagin
+
+            vec2 b = cos(floor(x)*sg + vec2(0.,-.5)*3.1415926535897932384626433832795);
+            
+            gl_FragColor = t1 + t2.xxzz*b.xyxy + 
+                                t2.yyww*b.yxyx*vec4(-1.,1.,-1.,1.);
+
+            //vec4 t1 = texture2D(tex,u1).xyzw;                   //.x=length .y=length  .z=angle .w=angle
+            //vec4 t2 = texture2D(tex,u2).xyzw;                   //.x=length .y=length  .z=angle .w=angle
+            //float pi = 3.1415926535897932384626433832795;
+            //vec4 m = vec4(0.,-.5, 0.,-.5)*pi;
+            //t1 = + t1.xxyy*cos(t1.zzww + m              )
+            //     + t2.xxyy*cos(t2.zzww + m + floor(x)*sg);
+            //gl_FragColor = vec4(sqrt(length(t1.xy)), sqrt(length(t1.zw)), atan(t1.y,t1.x), atan(t1.w,t1.z));
+        }`;
+        var frSh1c =
+        `precision highp float;
+        uniform sampler2D tex;
+        uniform mat4 mtx;
+        varying vec2 uv;
+        void main()
+        {
+            gl_FragColor = texture2D(tex,uv).xyzw*mtx[0].y;
+        }`;
+        frSh1d =
+        `precision highp float;
+        uniform sampler2D tex;
+        uniform mat4 mtx;
+        varying vec2 uv;
+        FUN
+        void main()
+        {
+            vec2 u = vec2(texture2D(tex,uv).x,uv.y);                //interlace data 
+            gl_FragColor = wavelet(u, mtx[0].zw, mtx[1].x, mtx[0].x)*sqrt(mtx[0].y);
+        }`;
+        frSh1e =
+        `precision highp float;
+        uniform sampler2D tex0;
+        uniform sampler2D tex1;
+        uniform mat4 mtx;
+        varying vec2 uv;
+        FUN
+        void main()
+        {
+            gl_FragColor = mixFFTs(uv, mtx[0].zw, mtx[1].x, mtx[0].x, mtx[1].y, tex0, tex1);
+        }`;
+        frSh1f =
+        `precision highp float;
+        uniform sampler2D tex;
+        uniform mat4 mtx;
+        varying vec2 uv;
+        FUN
+        void main()
+        {
+            float pi = 3.1415926535897932384626433832795;
+            float pd = 1./(2.*pi);
+
+            vec2 u = uv*vec2(2.,1.);    float a = floor(u.x);
+                 u = fract(u);
+                 u = u*vec2(1.,2.*mtx[2].w);
+            vec2 ua = u*mtx[1].w + mtx[1].yz;
+            vec2 ub = u*mtx[2].z + mtx[2].xy;
+            if(a< 2.){u = ua;}
+            if(a>=2.){u = ub;}
+                    //u = acos(cos(u*pi))/pi;
+                      u = fract(u);
+
+            vec4 t0 = texture2D(tex,u).xyzw;
+            vec4 t1 = wavelet(u, mtx[0].zw, mtx[1].x, mtx[0].x);
+            if(mtx[3].y!=0.){t0 = t1;}
+
+            t0 = vec4(length(t0.xy),
+                      length(t0.zw),atan(t0.y,t0.x)*pd,
+                                    atan(t0.w,t0.z)*pd) + vec4(.0,.0,.5,.5);
+
+          //if(a == 0.){t0.xy = t0.xy;}
+            if(a == 1.){t0.xy = t0.zw;}
+
+            gl_FragColor = vec4(0.,t0.xy,0.)*mtx[3].x;
+        }`;
+        frSh1fun =
+`
+float pi = 3.1415926535897932384626433832795;
+
+#define VISUAL 2 //2 = may be closest to how sound is perceived       and frequency increases across Y axis with 2^Y     curve
+                 //1 = visual detail increases for higher frequencies and frequency increases across Y axis with 1/(1-Y) curve 
+                 //0 = visual detail is equal  for all    frequencies and frequency increases across Y axis constantly
+
+vec4 wavelet( vec2  u,                              //pixel coordinate    range 0 to 1
+              vec2  m,                              //mouse coordinate    range 0 to 1
+              float a,                              //the [a] slider
+              float z)                              //resolution of texture [z,z]
+{
+    float x = u.x-.5;
+#if VISUAL==2
+    float o = 1./m.x;
+          o = 4.;                                   //comment this line to control visuals with mouse
+    float i = 1./pow(2.,o)/o;
+    x   = x  *o;
+    u.y = u.y*o;
+    float am = 1./exp(x*x*pow(2.,u.y)*i*z);
+    float ph = x*pow(2.,u.y)*i*pi*z;
+#elif VISUAL==1                   
+          m  = vec2(.1,-.679);                      //comment this line to control visuals with mouse
+    float mx = m.x-.5;                              
+          x *= pi/((u.y-m.y)*mx-m.y);
+    float am = 1./exp(x*x);                         //amplitude  a gaussian function
+    float ph = 2.*pi*x/mx;                          //phase      increases consantly across X axis
+#elif VISUAL==0 
+    float mx = z/m.x;
+          mx = z*pi*.5;                             //comment this line to control visuals with mouse
+    float am = 1./exp(x*x*mx);
+    float ph = x*u.y*mx*2.;
+#endif
+    return am*cos(ph + vec4(.0,-.5,.0,-.5)*pi);
+}
+vec4 mixFFTs(vec2  u,                               //pixel coordinate    range 0 to 1
+             vec2  m,                               //mouse coordinate    range 0 to 1
+             float a,                               //the [a] slider
+             float z,                               //resolution of texture
+             float lvl,                             //value of sound level slider
+             sampler2D sFFT,                        //texture with resolution [z,z]
+             sampler2D wFFT)                        //texture with resolution [z,1]
+{
+    vec4 t1 = texture2D(sFFT,u);
+    vec4 t2 = texture2D(wFFT,u);
+    return vec4(t1.x*t2.x - t1.y*t2.y,                //do convolution
+                t1.x*t2.y + t1.y*t2.x,
+                t1.z*t2.z - t1.w*t2.w,
+                t1.z*t2.w + t1.w*t2.z);               //*pow(2.,lvl*.5*float(VISUAL==1));
+}
+
+//wavelet() output .x = real      for right sound channel
+//                 .y = imaginary for right sound channel
+//                 .z = real      for left  sound channel
+//                 .w = imaginary for left  sound channel
+//wavelet()      --> FFT() --> wFFT
+//sound sampless --> FFT() --> sFFT .x = real      of right sound channel
+//                                  .y = imaginary of right sound channel
+//                                  .z = real      of left  sound channel
+//                                  .w = imaginary of left  sound channel
+//mixFFTs()      --> FFT() --> screen image
+//right click in screen images to run wavelet() and mixFFTs() 
+//left  click in screen images to move camera
+`;
+        
+        shaderCreator = function(vectexShaderCode, fragmentShaderCode)
+        {
+            var shader0 = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(shader0, vectexShaderCode);
+            gl.compileShader(shader0);
+            if(!gl.getShaderParameter(shader0, gl.COMPILE_STATUS)){alert(gl.getShaderInfoLog(shader0)); gl.deleteShader(shader0); return null;}
+            
+            var shader1 = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(shader1, fragmentShaderCode);
+            gl.compileShader(shader1);
+            if(!gl.getShaderParameter(shader1, gl.COMPILE_STATUS)){alert(gl.getShaderInfoLog(shader1)); gl.deleteShader(shader1); return null;}
+
+            var shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, shader0);
+            gl.attachShader(shaderProgram, shader1);
+            gl.linkProgram(shaderProgram);
+
+            gl.detachShader(shaderProgram, shader0);
+            gl.detachShader(shaderProgram, shader1);
+            gl.deleteShader(shader0);
+            gl.deleteShader(shader1);
+
+            return shaderProgram;
+        };
+
+        shaderP1a = shaderCreator(vxSh1a, frSh1a);
+        shdVtx1a = gl.getAttribLocation (shaderP1a, "vtx");
+        shdMtx1a = gl.getUniformLocation(shaderP1a, "mtx");
+        shdTex1a0 = gl.getUniformLocation(shaderP1a, "tex0");
+        shdTex1a1 = gl.getUniformLocation(shaderP1a, "tex1");
+
+        shaderP1b = shaderCreator(vxSh1a, frSh1b);
+        shdVtx1b = gl.getAttribLocation (shaderP1b, "vtx");
+        shdMtx1b = gl.getUniformLocation(shaderP1b, "mtx");
+        shdTex1b = gl.getUniformLocation(shaderP1b, "tex");
+
+        shaderP1c = shaderCreator(vxSh1a, frSh1c);
+        shdVtx1c = gl.getAttribLocation (shaderP1c, "vtx");
+        shdMtx1c = gl.getUniformLocation(shaderP1c, "mtx");
+        shdTex1c = gl.getUniformLocation(shaderP1c, "tex");
+
+        shaderP1d = null;
+        iniComboShdr1 = function()
+        {
+            var frd = frSh1d.replace("FUN",frSh1fun);
+            var fre = frSh1e.replace("FUN",frSh1fun);
+            var frf = frSh1f.replace("FUN",frSh1fun);
+            var shd = shaderCreator(vxSh1a, frd);   if(shd == null){return;}
+            var she = shaderCreator(vxSh1a, fre);   if(she == null){return;}
+            var shf = shaderCreator(vxSh1a, frf);   if(shf == null){return;}
+            if(shaderP1d != null)
+            {
+                gl.useProgram(null);
+                gl.deleteProgram(shaderP1d);
+                gl.deleteProgram(shaderP1e);
+                gl.deleteProgram(shaderP1f);
+            }
+            shaderP1d = shd;
+            shdVtx1d = gl.getAttribLocation (shaderP1d, "vtx");
+            shdMtx1d = gl.getUniformLocation(shaderP1d, "mtx");
+            shdTex1d = gl.getUniformLocation(shaderP1d, "tex");
+            shaderP1e = she;
+            shdVtx1e  = gl.getAttribLocation (shaderP1e, "vtx");
+            shdMtx1e  = gl.getUniformLocation(shaderP1e, "mtx");
+            shdTex1e0 = gl.getUniformLocation(shaderP1e, "tex0");
+            shdTex1e1 = gl.getUniformLocation(shaderP1e, "tex1");
+            shaderP1f = shf;
+            shdVtx1f = gl.getAttribLocation (shaderP1f, "vtx");
+            shdMtx1f = gl.getUniformLocation(shaderP1f, "mtx");
+            shdTex1f = gl.getUniformLocation(shaderP1f, "tex");
+        }
+        iniComboShdr1();
+
+        //meshes all in one buff
+        var meshData = new Float32Array(512*512*3);
+        var w = 0;
+        for(var i = 0; i < 512*512; ++i)
+        {
+            meshData[w] = i+.25;    ++w;
+            meshData[w] = i+.50;    ++w;
+            meshData[w] = i+.75;    ++w;
+        }
+        meshBuff = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, meshBuff);
+        gl.bufferData(gl.ARRAY_BUFFER, meshData, gl.STATIC_DRAW);
+
+        //textures
+        textMode = -1;//which example is user on to activate certain textures into GPU
+        texCreator = function(format, x, y, type, txf, data, txId)
+        {
+            gl.activeTexture(txId);   
+            var tx = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, tx);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, txf);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, txf);
+            gl.texImage2D(gl.TEXTURE_2D, 0, format, x, y, 0, format, type, data);
+            return tx;
+        }
+
+        //frameBuffers
+        frameBuffCreator = function(texture)
+        {
+            var fb = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+            return fb;
+        }
+        //gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    
+    var sQx = null;
+    var gainNd = null;
+    var scriNd = null;
+    var micNd = null;
+    var fileNd = null;
+    var micStrm = null;
+
+    var imgEml1 = null;
+    var tX1 = new Array(16);//2*sampleDomain 2*freqDomain 2*transform 1*interlace 6*tex
+    var fB1 = new Array(16);//2*sampleDomain 2*freqDomain 2*transform
+
+    var boL1 = new Array(32);
+
+    var x1D    = 10|0;
+    var x1DMAX = 14|0;
+    var xSn = 0|0;
+
+    var sondLVLmx = 12|0;//max number of FFT halfvings
+    var sondLVLmx2= 0;  //the ones that will be filled
+    var sondLVL  = new Array(sondLVLmx<<1);//temporal buffers while processing sound data
+    var sondLVLG = new Array(sondLVLmx   );//sound data in GPU          format
+    var sondLVLB = new Array(sondLVLmx   );//sound data in audioContext format
+    var sondLVLt = 0;   //know when it finished doing them all
+    var sondLod = null;
+    var cnv = 0|0;//where is the convolution
+    var fRL = [null,null];//fft of right left sound channel
+    var prLVL = 0;//previous selected lvl
+    var sondNd = null;
+
+    var rna1  = -1; //paint which texture    -1=dont paint
+    var camG1 = 0;//which side of screen currently moving
+    var cam1  = new Float32Array([0,0,1.2,    0,0,1]);//2cameras, XY position, Z zoom
+
+    var touchStart1 = null;
+    var touchEnd1 = null;
+    var touchMove1 = null;
+    var mouseDown1 = null;
+    var mouseUp1 = null;
+    var mouseMove1 = null;
+    var mouseWheel1 = null;
+    var mosP1 = new Uint8Array([0,0,0]);//mouse 2clik pressed
+    var inpX1 = 0; var inpX12 = 0;  var mauX1 =.6;
+    var inpY1 = 0; var inpY12 = 0;  var mauY1 =.38;
+    var inpXd1 = 0; var inpXd12 = 0; 
+    var inpYd1 = 0; var inpYd12 = 0;
+    var holdI1 = -1;//hold down while camera
+
+    var wvltChang1O = false;
+    var gpufft1DO   = false;
+    var mixFFTsO    = false;
+
+    var frSh1fun = " ";//custom brush shader
+    var frSh1iV = false;//shader editor visible or hidden
+
+    var rndC1 = false;
+
+    var screD1 = 2;//number of images in screen
+
+    var stopSond;
+    var playSond;
+    var smplsLoad1;
+    var gpufft1D;
+    var mixFFTs;
+    var wvltChang1;
+    var resChng1;
+    var iniAudio;
+    var audioStop;
+    var iniMic;
+    var micSuccess;
+    var audioFile;
+    var formatAudio;
+    var playAudio;
+    var chngX1D;
+
+    var chngLVL1;
+    var chngVew1;
+    var spwnCode1;
+    var chngAB1;
+
+    var dropSound;
+    var dropSound2;
+
+    var rndr8 = false;
+    var plyMu8 = false;
+
+    var cnvs1a;
+    var cntx1a;
+    var xmlhr;
+
+    function swap1DGen(p)
+    {
+        var sz  = 1<<p;
+        var swp = new Uint32Array(sz);
+
+        var an  = 1|0;
+        var an1 = 0|0;
+        var cc  = 0|0;
+        var msk = (sz-1)|0;
+        var sft = (1<<31)>>(32-p);
+        for(var i = 0|0; i < sz; i=(i+1)|0)
+        {
+            var ki = (an1/an)|0;
+            var ko = (((ki<<1)+1)*an - an1)|0;
+            an1 = an;
+            an  = ko;
+            swp[i] = cc;
+            cc     = cc ^ ((sft>>ki)&msk);
+        }
+        return swp;
+    }
+    function fft1D(sgn,p,data)
+    {
+        var PI = 3.1415926535897932384626433832795;
+        var sz = 1<<p;
+        var tm = [new Float64Array(sz<<1),      //processing buffers
+                  new Float64Array(sz<<1)];     //processing buffers
+        var dv = 1/Math.sqrt(sz);
+        var w  = 0|0;
+        var w0 = 0|0;
+        var w1 = 1|0;
+        var da0 = tm[w0];
+        var da1 = tm[w1];
+
+        var an  = 1|0;
+        var an1 = 0|0;
+        var cc  = 0|0;
+        var msk = (sz-1)|0;
+        var sft = (1<<31)>>(32-p);
+        for(var i = 0|0; i < sz; i=(i+1)|0)//interlace and normalize
+        {
+            var ki = (an1/an)|0;
+            var ko = (((ki<<1)+1)*an - an1)|0;
+            an1 = an;
+            an  = ko;
+            var r  = cc<<1;         cc = cc ^ ((sft>>ki)&msk);
+            da0[w] = data[r  ]*dv;  w=(w+1)|0;
+            da0[w] = data[r+1]*dv;  w=(w+1)|0;
+        }
+        for(var j = 0|0; j < p; j=(j+1)|0)//rotate and sum
+        {
+            w0  = (w0+1)&1;
+            w1  = (w1+1)&1;
+            da0 = tm[w0];
+            da1 = tm[w1];
+            var m0 = 1<<j;  var m4 = sgn*PI/m0;
+            var m3 = ~m0;
+            w = 0|0;
+            for(var i = 0|0; i < sz; i=(i+1)|0)
+            {
+                var r  = i&m3;
+                var r0 = (r   )<<1;
+                var r1 = (r+m0)<<1;
+                var ax = da1[r0  ];
+                var ay = da1[r0+1];
+                var bx = da1[r1  ];
+                var by = da1[r1+1];
+                var rot = i*m4;
+                var rtx = Math.cos(rot);
+                var rty = Math.sin(rot);
+                da0[w] = ax + bx*rtx - by*rty;  w=(w+1)|0;   
+                da0[w] = ay + bx*rty + by*rtx;  w=(w+1)|0;
+            }
+        }
+        return da0;
+    }
+    function funfuse(f)
+    {
+        var a =     fft1D.toString()+
+                  funfuse.toString()+"\nonmessage";
+        return f.toString().replace("onmessage",a);
+    }
+    function lvlGenA()
+    {
+        onmessage = function(e)
+        {
+            postMessage([e.data[0], fft1D(-1,e.data[1],e.data[2])]);
+        }
+    }
+    function lvlGenB(e)
+    {
+        var id  = e.data[0];
+        fRL[id] = e.data[1];
+        if( fRL[0] == null || 
+            fRL[1] == null ){return;}
+
+        var lw = Math.max( xSn-sondLVLmx,
+                           Math.log2(sQx.sampleRate/512)|0);
+        sondLVLmx2 = 0;
+        for(var p = xSn; p > lw; --p)
+        {
+            id = sondLVLmx2<<1;    ++sondLVLmx2;
+            var blobURL = URL.createObjectURL( new Blob(['(',funfuse(lvlGenC),')()'], { type: 'application/javascript' } )  );
+            var myWrkr;
+            myWrkr = new Worker( blobURL );
+            myWrkr.postMessage([id+0,xSn,p,fRL[0]]);
+            myWrkr.onmessage = lvlGenD;
+            myWrkr = new Worker( blobURL );
+            myWrkr.postMessage([id+1,xSn,p,fRL[1]]);
+            myWrkr.onmessage = lvlGenD;
+            URL.revokeObjectURL( blobURL );
+        }
+    }
+    function lvlGenC()
+    {
+        onmessage = function(e)
+        {
+            var xSn = e.data[1];
+            var p   = e.data[2];
+            var d   = e.data[3];
+
+            var sz = 1  << p;
+            var h  = sz >> 1;
+            var h2 = h  << 1;
+            var m  = ((1 << xSn) - sz)|0;
+
+            h  = h  << 1;
+            h2 = h2 << 1;
+            m  = m  << 1;
+            for(var i = h; i < h2; i=(i+1)|0)//reduce data size
+            {
+                d[i] = d[i+m];
+            }
+            //for(var i = 0|0; i < sz; i=(i+1)|0)
+            //{
+            //    if(swp[i]>=h){swp[i] = (swp[i]+m)|0;}
+            //}
+            
+
+            //var d   = e.data[3];
+            //var lvl = e.data[0]>>1;
+            //var w2  = d.length>>(5+lvl);
+            //var zr  = (d.length-w2)|0;
+            //var w   = w2>>1;
+            //for(var i = 0|0; i < zr; i=(i+1)|0)
+            //{
+            //    d[w+i] = 0;
+            //}
+
+            postMessage([e.data[0], fft1D(1,p,d)]);
+        }
+    }
+    function lvlGenD(e)
+    {
+            var id  = e.data[0];
+        sondLVL[id] = e.data[1];
+
+            id = id & (~1);
+        var dR = sondLVL[id+0];
+        var dL = sondLVL[id+1];  if(dR == null || dL == null){return;}
+
+        var l = dR.length>>1;
+        var d = new Float32Array(l<<2);
+        var w = 0|0;  var r = 0|0;
+        for(var i = 0|0; i < l; i=(i+1)|0)
+        {
+            d[w] = dR[r];  w=(w+1)|0;  r=(r+1)|0;
+            d[w] = dR[r];  w=(w+1)|0;  r=(r-1)|0;
+            d[w] = dL[r];  w=(w+1)|0;  r=(r+1)|0;
+            d[w] = dL[r];  w=(w+1)|0;  r=(r+1)|0;
+        }
+        var b = sQx.createBuffer(2, l, sQx.sampleRate);
+        var dat = b.getChannelData(0);  for(var i = 0|0; i < l; i=(i+1)|0){dat[i] = dR[i<<1];}
+            dat = b.getChannelData(1);  for(var i = 0|0; i < l; i=(i+1)|0){dat[i] = dL[i<<1];}
+
+        id = id>>1;
+        sondLVLG[id] = d;
+        sondLVLB[id] = b;
+         ++sondLVLt;
+        if(sondLVLt != sondLVLmx2){return;}
+
+        for(var i = 0; i < sondLVL.length; ++i){sondLVL[i] = null;}
+
+        boL1[16].max   = 1<<xSn;//scroll trough sound time
+        boL1[18].innerHTML = "lvl = 0";
+        boL1[19].max   = sondLVLmx2-1;//levels of sound halfing
+      //boL1[19].value = 0; alredy set to 0 in smplsLoad1()
+
+        gpufft1DO = true;
+        mixFFTsO  = true;
+        rndRqst1();
+    }
+    
+    function interface1()
+    {
+        for(var i = 0; i <     tX1.length; ++i){    tX1[i] = null;}
+        for(var i = 0; i <     fB1.length; ++i){    fB1[i] = null;}
+        for(var i = 0; i < sondLVL.length; ++i){sondLVL[i] = null;}
+
+        stopSond = function()
+        {
+            if(sondNd == null){return;}
+            sondNd.stop();
+            sondNd = null;
+            boL1[5].innerHTML = "play";
+        }
+        playSond = function()
+        {
+            if(sQx==null){return;}
+            if(sondNd == null)
+            {
+                sondNd = sQx.createBufferSource();
+                sondNd.buffer = sondLVLB[boL1[19].value];
+                sondNd.playbackRate.value = 1;
+                sondNd.connect(sQx.destination);
+                sondNd.onended = stopSond;
+                sondNd.start(0,boL1[16].value/sQx.sampleRate);
+
+                boL1[5].innerHTML = "pause";
+            }
+            else
+            {
+                sondNd.stop();
+                sondNd = null;
+                boL1[5].innerHTML = "play";
+            }
+        }
+        smplsLoad1 = function(dR,dL)
+        {
+            var l = dR.length;
+            xSn = Math.ceil(Math.log2(l))|0;
+            var pP = 1<<xSn;
+            var dv = 1/pP;
+            boL1[16].value = 0;
+            boL1[16].max   = 0;//scroll trough sound time
+            boL1[18].innerHTML = "lvl loading...";
+            boL1[19].max   = 0;//levels of sound halfing    disable while loading
+            boL1[19].value = 0;    prLVL = 0;
+
+            var sondR = new Float64Array(pP<<1);    for(var i = 0|0; i < l; i=(i+1)|0){sondR[i<<1] = dR[i];}
+            var sondL = new Float64Array(pP<<1);    for(var i = 0|0; i < l; i=(i+1)|0){sondL[i<<1] = dL[i];}
+            sondLVLt = 0;
+            fRL[0] = null;
+            fRL[1] = null;
+
+            var blobURL = URL.createObjectURL( new Blob(['(',funfuse(lvlGenA),')()'], { type: 'application/javascript' } )  );
+            var myWrkr;
+            myWrkr = new Worker( blobURL );
+            myWrkr.postMessage([0,xSn,sondR]);
+            myWrkr.onmessage = lvlGenB;
+            myWrkr = new Worker( blobURL );
+            myWrkr.postMessage([1,xSn,sondL]);
+            myWrkr.onmessage = lvlGenB;
+            URL.revokeObjectURL( blobURL );
+        }
+        gpufft1D = function()
+        {
+            if(!gpufft1DO || sondLVLG[0]==null){return;}  gpufft1DO = false;
+
+            var dat = sondLVLG[boL1[19].value];
+            var x   = 1<<x1D;
+            var x4  = x<<2;
+            var m   = boL1[16].value|0;
+
+                var l = (1<<xSn)-m;
+            if(x<l){l = boL1[9].value|0;}//fill one part of the full FFT array, boL1[9] <= x  always
+                    l = l<<2;
+                    m = m<<2;
+           
+            for(var i = 0|0; i <  l; i=(i+1)|0){sondLod[i] = dat[m+i];}
+            for(var i =   l; i < x4; i=(i+1)|0){sondLod[i] =        0;}
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.activeTexture(gl.TEXTURE0);
+            //gl.bindTexture(gl.TEXTURE_2D, tX1[0]);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, x, 1, gl.RGBA, gl.FLOAT, sondLod);
+
+            shdMtx[0] =   x;
+            shdMtx[1] = 1/x;
+
+            gl.viewport(0, 0, x, 1);
+
+            var g0 = 0;
+            var g1 = 1;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[g1]);//interlace
+            gl.useProgram(shaderP1a);
+            gl.uniform1i(shdTex1a0, g0);
+            gl.uniform1i(shdTex1a1, 8);
+            gl.uniformMatrix4fv(shdMtx1a, false, shdMtx);
+            gl.vertexAttribPointer(shdVtx1a, 1, gl.FLOAT, 0, 0, 0);
+            gl.enableVertexAttribArray(shdVtx1a);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            var lst = (x1D-1)|0;
+            for(var i = 0|0; i < x1D; i=(i+1)|0)//1D FFT
+            {
+                shdMtx[12] = 1<<(i+0);
+                shdMtx[13] = 1<<(i+1);
+                shdMtx[14] = 1/shdMtx[13];
+                shdMtx[15] =-1*shdMtx[14]*PI*2;
+                g0 = (g0+1)&1;
+                g1 = (g1+1)&1;    if(i==lst){g1 = 2|0;}
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[g1]);
+                gl.useProgram(shaderP1b);
+                gl.uniform1i(shdTex1b, g0);
+                gl.uniformMatrix4fv(shdMtx1b, false, shdMtx);
+                gl.vertexAttribPointer(shdVtx1b, 1, gl.FLOAT, 0, 0, 0);
+                gl.enableVertexAttribArray(shdVtx1b);
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+            }
+            //g0 = (g0+1)&1;
+            //g1 = (g1+1)&1;
+            //shdMtx[1] = 1;
+            //gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[2]);//pass and normalize
+            //gl.useProgram(shaderP1c);
+            //gl.uniform1i(shdTex1c, g1);
+            //gl.uniformMatrix4fv(shdMtx1c, false, shdMtx);
+            //gl.vertexAttribPointer(shdVtx1c, 1, gl.FLOAT, 0, 0, 0);
+            //gl.enableVertexAttribArray(shdVtx1c);
+            //gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+            //gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        }
+        mixFFTs = function()
+        {
+            if(!mixFFTsO){return;}  mixFFTsO = false;
+
+            var x = 1<<x1D;
+
+            shdMtx[0] =   x;
+            shdMtx[1] = 1/x;
+            shdMtx[2] = mauX1;
+            shdMtx[3] = mauY1;
+            shdMtx[4] = boL1[15].value;
+            shdMtx[5] = boL1[19].value;
+
+            gl.viewport(0, 0, x, x);
+
+            var g0 = 0;
+            var g1 = 1;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[3+g1]);//mix
+            gl.useProgram(shaderP1e);
+            gl.uniform1i(shdTex1e0, 2);//sound   FFT
+            gl.uniform1i(shdTex1e1, 5);//wavelet FFT
+            gl.uniformMatrix4fv(shdMtx1e, false, shdMtx);
+            gl.vertexAttribPointer(shdVtx1e, 1, gl.FLOAT, 0, 0, 0);
+            gl.enableVertexAttribArray(shdVtx1e);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            g0 = (g0+1)&1;
+            g1 = (g1+1)&1;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[3+g1]);//interlace
+            gl.useProgram(shaderP1a);
+            gl.uniform1i(shdTex1a0, 3+g0);
+            gl.uniform1i(shdTex1a1, 8   );
+            gl.uniformMatrix4fv(shdMtx1a, false, shdMtx);
+            gl.vertexAttribPointer(shdVtx1a, 1, gl.FLOAT, 0, 0, 0);
+            gl.enableVertexAttribArray(shdVtx1a);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            var lst = (x1D-1)|0;
+            for(var i = 0|0; i < x1D; i=(i+1)|0)//1D FFT
+            {
+                shdMtx[12] = 1<<(i+0);
+                shdMtx[13] = 1<<(i+1);
+                shdMtx[14] = 1/shdMtx[13];
+                shdMtx[15] = 1*shdMtx[14]*PI*2;
+                g0 = (g0+1)&1;
+                g1 = (g1+1)&1;    if(i==lst){g1 = ((6-3)+cnv)|0;}
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[3+g1]);
+                gl.useProgram(shaderP1b);
+                gl.uniform1i(shdTex1b, 3+g0);
+                gl.uniformMatrix4fv(shdMtx1b, false, shdMtx);
+                gl.vertexAttribPointer(shdVtx1b, 1, gl.FLOAT, 0, 0, 0);
+                gl.enableVertexAttribArray(shdVtx1b);
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+            }
+            //g0 = (g0+1)&1;
+            //g1 = (g1+1)&1;
+            //shdMtx[1] = 1;
+            //gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[6+cnv]);//pass and normalize
+            //gl.useProgram(shaderP1c);
+            //gl.uniform1i(shdTex1c, 3+g0);
+            //gl.uniformMatrix4fv(shdMtx1c, false, shdMtx);
+            //gl.vertexAttribPointer(shdVtx1c, 1, gl.FLOAT, 0, 0, 0);
+            //gl.enableVertexAttribArray(shdVtx1c);
+            //gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+            //gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        }
+        wvltChang1 = function()
+        {
+            if(!wvltChang1O){return;}  wvltChang1O = false;
+
+            var x = 1<<x1D;
+
+            shdMtx[0] =   x;
+            shdMtx[1] = 1/x;
+            shdMtx[2] = mauX1;
+            shdMtx[3] = mauY1;
+            shdMtx[4] = boL1[15].value*1;
+
+            gl.viewport(0, 0, x, x);
+
+            var g0 = 0;
+            var g1 = 1;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[3+g1]);//apply wavelet shader and interlace
+            gl.useProgram(shaderP1d);
+            gl.uniform1i(shdTex1d, 8);
+            gl.uniformMatrix4fv(shdMtx1d, false, shdMtx);
+            gl.vertexAttribPointer(shdVtx1d, 1, gl.FLOAT, 0, 0, 0);
+            gl.enableVertexAttribArray(shdVtx1d);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            var lst = (x1D-1)|0;
+            for(var i = 0|0; i < x1D; i=(i+1)|0)//1D FFT on each row of 2Dtexture
+            {
+                shdMtx[12] = 1<<(i+0);
+                shdMtx[13] = 1<<(i+1);
+                shdMtx[14] = 1/shdMtx[13];
+                shdMtx[15] =-1*shdMtx[14]*PI*2;
+                g0 = (g0+1)&1;
+                g1 = (g1+1)&1;  if(i==lst){g1 = (5-3)|0;}
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[3+g1]);
+                gl.useProgram(shaderP1b);
+                gl.uniform1i(shdTex1b, 3+g0);
+                gl.uniformMatrix4fv(shdMtx1b, false, shdMtx);
+                gl.vertexAttribPointer(shdVtx1b, 1, gl.FLOAT, 0, 0, 0);
+                gl.enableVertexAttribArray(shdVtx1b);
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+            }
+            //g0 = (g0+1)&1;
+            //g1 = (g1+1)&1;
+            //gl.bindFramebuffer(gl.FRAMEBUFFER, fB1[5]);//pass and normalize
+            //gl.useProgram(shaderP1c);
+            //gl.uniform1i(shdTex1c, 3+g1);
+            //gl.uniformMatrix4fv(shdMtx1c, false, shdMtx);
+            //gl.vertexAttribPointer(shdVtx1c, 1, gl.FLOAT, 0, 0, 0);
+            //gl.enableVertexAttribArray(shdVtx1c);
+            //gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+            //gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        }
+        resChng1 = function()
+        {
+            x1D = boL1[4].value|0;
+            var x = 1<<x1D;
+            var xd = 1/x;
+
+            boL1[3].innerHTML = "2<sup>"+x1D+"</sup> = "+ x;
+            var smpls = boL1[9].value|0;
+            if(smpls>x){boL1[9].value = x;  boL1[8].innerHTML = "samples = "+x; }
+            boL1[9].max = x;
+
+            sondLod = new Float32Array(x<<2);
+            var itx = new Float32Array((x*x)<<2);
+
+            var intrlc = new Float32Array(x<<2);
+            var an  = 1|0;
+            var an1 = 0|0;
+            var cc  = 0|0;
+            var msk = (x-1)|0;
+            var sft = (1<<31)>>(32-x1D);
+            for(var i = 0|0; i < x; i=(i+1)|0)
+            {
+                var ki = (an1/an)|0;
+                var ko = (((ki<<1)+1)*an - an1)|0;
+                an1 = an;
+                an  = ko;
+                intrlc[i<<2] = (cc+.5)*xd;   cc = cc ^ ((sft>>ki)&msk);
+            }
+
+            //1Dtext  2processing,1saveresult
+            //2Dtext  2processing,1wevelet,2saveresult
+        
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            if(fB1[0]!=null)
+            {
+                gl.deleteTexture(tX1[0]);
+                gl.deleteTexture(tX1[1]);
+                gl.deleteTexture(tX1[2]);
+
+                gl.deleteTexture(tX1[3]);
+                gl.deleteTexture(tX1[4]);
+                gl.deleteTexture(tX1[5]);
+                gl.deleteTexture(tX1[6]);
+                gl.deleteTexture(tX1[7]);
+
+                gl.deleteTexture(tX1[8]);
+                
+                gl.deleteFramebuffer(fB1[0]);
+                gl.deleteFramebuffer(fB1[1]);
+                gl.deleteFramebuffer(fB1[2]);
+
+                gl.deleteFramebuffer(fB1[3]);
+                gl.deleteFramebuffer(fB1[4]);
+                gl.deleteFramebuffer(fB1[5]);
+                gl.deleteFramebuffer(fB1[6]);
+                gl.deleteFramebuffer(fB1[7]);
+            }
+            tX1[0] = texCreator(gl.RGBA, x,1, gl.FLOAT, gl.NEAREST, sondLod, gl.TEXTURE0);
+            tX1[1] = texCreator(gl.RGBA, x,1, gl.FLOAT, gl.NEAREST, sondLod, gl.TEXTURE1);
+            tX1[2] = texCreator(gl.RGBA, x,1, gl.FLOAT, gl.NEAREST, sondLod, gl.TEXTURE2);
+
+            tX1[3] = texCreator(gl.RGBA, x,x, gl.FLOAT, gl.NEAREST,     itx, gl.TEXTURE3);
+            tX1[4] = texCreator(gl.RGBA, x,x, gl.FLOAT, gl.NEAREST,     itx, gl.TEXTURE4);
+            tX1[5] = texCreator(gl.RGBA, x,x, gl.FLOAT, gl.NEAREST,     itx, gl.TEXTURE5);
+            tX1[6] = texCreator(gl.RGBA, x,x, gl.FLOAT, gl.NEAREST,     itx, gl.TEXTURE6);
+            tX1[7] = texCreator(gl.RGBA, x,x, gl.FLOAT, gl.NEAREST,     itx, gl.TEXTURE7);
+
+            tX1[8] = texCreator(gl.RGBA, x,1, gl.FLOAT, gl.NEAREST,  intrlc, gl.TEXTURE8);
+
+            fB1[0] = frameBuffCreator(tX1[0]);
+            fB1[1] = frameBuffCreator(tX1[1]);
+            fB1[2] = frameBuffCreator(tX1[2]);
+
+            fB1[3] = frameBuffCreator(tX1[3]);
+            fB1[4] = frameBuffCreator(tX1[4]);
+            fB1[5] = frameBuffCreator(tX1[5]);
+            fB1[6] = frameBuffCreator(tX1[6]);
+            fB1[7] = frameBuffCreator(tX1[7]);
+
+            wvltChang1O = true;
+            gpufft1DO   = true;
+            mixFFTsO    = true;
+            rndRqst1();
+        }
+
+        iniAudio = function()
+        {
+            if(sQx != null) return;
+            sQx = new AudioContext();
+        }
+        /* audioStop = function()
+        {
+            if(micNd  != null){  micNd.disconnect();     micNd = null;}
+            if(fileNd != null){ fileNd.disconnect();    fileNd = null;}
+            if(scriNd != null){ scriNd.disconnect();    scriNd = null;}
+            if(gainNd != null){ gainNd.disconnect();    gainNd = null;}
+            if(micStrm != null){ micStrm.getTracks().forEach(track => track.stop()); micStrm = null; }
+            rndr8 = false;
+        }
+        iniMic = function()
+        {
+            iniAudio();
+            navigator.mediaDevices.getUserMedia({audio: true, video: false}).then(micSuccess);
+        }
+        micSuccess = function(stream)
+        {
+            audioStop();
+
+            gainNd = sQx.createGain();
+            gainNd.gain.value = .5;
+            gainNd.connect(sQx.destination);
+
+            plyMu8 = false;
+            scriNd = sQx.createScriptProcessor(1<<x1D, 2, 2) || sQx.createJavaScriptNode(1<<x1D, 2, 2);
+            scriNd.onaudioprocess = render8aGl;
+            scriNd.connect(gainNd);
+            
+            micStrm = stream;
+            micNd = sQx.createMediaStreamSource(stream);
+            micNd.connect(scriNd);
+
+            rndr8 = true; rndRqst1();
+        } */
+        
+        audioFile = function(e)
+        {
+            iniAudio();
+            e.target.files[0].arrayBuffer()
+            .then(arrBff    => sQx.decodeAudioData(arrBff))
+            .then(audioBff  => formatAudio(audioBff));
+        }
+        formatAudio = function(audioBff)
+        {
+            var dR = audioBff.getChannelData(0);
+            var dL = null;
+            if(audioBff.numberOfChannels >= 2){dL = audioBff.getChannelData(1);}
+            else                              {dL = new Float32Array(audioBff.length);}
+            smplsLoad1(dR,dL);
+        }
+        /* playAudio = function(audioBff)
+        {
+            audioStop();
+  
+            gainNd = sQx.createGain();
+            gainNd.gain.value = .5;
+            gainNd.connect(sQx.destination);
+  
+            plyMu8 = true;
+            scriNd = sQx.createScriptProcessor(1<<x1D, 2, 2) || sQx.createJavaScriptNode(1<<x1D, 2, 2);
+            scriNd.onaudioprocess = render8aGl;
+            scriNd.connect(gainNd);
+  
+            fileNd = sQx.createBufferSource();
+            fileNd.buffer = audioBff;
+            fileNd.connect(scriNd);
+            fileNd.start();
+  
+            rndr8 = true; rndRqst1();
+        } */
+
+
+        imgEml1 = new Image(2, 2);
+
+        var fnz = "24px";
+        var buI = null;
+        var dv1 = null;
+
+        //buI = document.createElement("pre");
+        //buI.style.fontFamily = "inherit";
+        //buI.style.fontSize = "40px";
+        //buI.style.margin = "0px";
+        //buI.style.textAlign = "center";
+        //buI.innerHTML = "1D WAVELET CONVOLUTION";
+        //document.body.appendChild(buI);
+
+        buI = document.createElement("table");
+        buI.style.marginLeft = "auto";
+        buI.style.marginRight = "auto";
+        document.body.appendChild(buI);
+
+            var tr = document.createElement("tr");
+            buI.appendChild(tr);
+
+            var th = null;
+
+            th = document.createElement("th");
+            th.style.width = "200px";
+            tr.appendChild(th);
+            buI = document.createElement("input");
+            //buI.style.display = "block";
+            buI.style.fontFamily = "inherit";
+            buI.style.margin = "0px 5px";
+            buI.style.width = "200px";
+            buI.type = "file";
+            buI.onchange = audioFile;
+            //buI.innerHTML = "sound file";
+            th.appendChild(buI);
+            boL1[0] = buI;
+
+            ////th = document.createElement("th");
+            ////tr.appendChild(th);
+            //buI = document.createElement("button");
+            ////buI.style.display = "block";
+            //buI.style.fontFamily = "inherit";
+            //buI.style.margin = "0px 5px";
+            //buI.style.width = "200px";
+            //buI.onclick = iniMic;
+            //buI.innerHTML = "microphone";
+            //th.appendChild(buI);
+            //boL1[1] = buI;
+
+            chngX1D = function()
+            {
+                var a = boL1[2].value;
+                boL1[17].style.height = a+"px";
+                //cnvs1a.style.height = a+"px";
+                //boL1[4].innerHTML = a.toString();
+                rndRqst1();
+            }
+
+            th = document.createElement("th");
+            th.style.width = "150px";
+            tr.appendChild(th);
+            buI = document.createElement("pre");
+            buI.style.margin = "0px";
+            buI.style.fontFamily = "inherit";
+            buI.style.fontWeight = "normal";
+            buI.style.fontSize = "20px";
+            //buI.innerHTML = "2<sup>"+x1D+"</sup> = "+ (1<<x1D);
+            th.appendChild(buI);
+            boL1[3] = buI;
+
+            //th = document.createElement("th");
+            //tr.appendChild(th);
+            buI = document.createElement("input");
+            //buI.style.display = "block";
+            buI.style.margin = "0px";
+            buI.style.width = "150px";
+            buI.type = "range";
+            buI.min =   4;
+            buI.max =   x1DMAX;
+            buI.value = x1D;
+            buI.step =  1;
+            buI.oninput = resChng1;
+            th.appendChild(buI);
+            boL1[4] = buI;
+
+            buI = document.createElement("input");
+            //buI.style.display = "block";
+            buI.style.margin = "0px 5px";
+            buI.style.width = "150px";
+            buI.type = "range";
+            buI.min =   256;
+            buI.max =   1024;
+            buI.value = window.innerHeight*.85;
+            buI.step =  1;
+            buI.oninput = chngX1D;
+            th.appendChild(buI);
+            boL1[2] = buI;
+
+            chngLVL1 = function()
+            {
+                var lvl = boL1[19].value|0;
+                var le0 = sondLVLG[prLVL].length>>2;
+                var le1 = sondLVLG[  lvl].length>>2;    prLVL = lvl;
+                var b   = boL1[16].value/le0;
+                boL1[16].max       = le1;
+                boL1[16].value     = (b*le1)|0;
+                boL1[18].innerHTML = "lvl = "+ lvl;
+                
+                gpufft1DO = true;
+                mixFFTsO  = true;
+                rndRqst1();
+            }
+            th = document.createElement("th");
+            th.style.width = "150px";
+            tr.appendChild(th);
+            buI = document.createElement("pre");
+            buI.style.margin = "0px";
+            buI.style.fontFamily = "inherit";
+            buI.style.fontWeight = "normal";
+            buI.style.fontSize = "20px";
+            buI.innerHTML = "lvl = 0";
+            th.appendChild(buI);
+            boL1[18] = buI;
+
+            buI = document.createElement("input");
+            buI.style.margin = "0px";
+            buI.style.width = "150px";
+            buI.type = "range";
+            buI.min =   0;
+            buI.max =   0;
+            buI.value = 0;
+            buI.step =  1;
+            buI.oninput = chngLVL1;
+            th.appendChild(buI);
+            boL1[19] = buI;
+
+            buI = document.createElement("button");
+            //buI.style.display = "block";
+            buI.style.fontFamily = "inherit";
+            buI.style.margin = "0px 5px";
+            buI.style.width = "150px";
+            buI.onclick = playSond;
+            buI.innerHTML = "play";
+            th.appendChild(buI);
+            boL1[5] = buI;
+
+            th = document.createElement("th");
+            th.style.width = "150px";
+            tr.appendChild(th);
+
+            chngVew1 = function()
+            {
+                var a = ["convolution","wavelets"];
+                boL1[6].innerHTML = a[boL1[7].value];
+                rndRqst1();
+            }
+
+            buI = document.createElement("pre");
+            buI.style.margin = "0px";
+            buI.style.fontFamily = "inherit";
+            buI.style.fontWeight = "normal";
+            buI.style.fontSize = "20px";
+            //buI.innerHTML = "stp = 2<sup>"+x1D+"</sup>";
+            th.appendChild(buI);
+            boL1[6] = buI;
+
+            //th = document.createElement("th");
+            //tr.appendChild(th);
+            buI = document.createElement("input");
+            //buI.style.display = "block";
+            buI.style.margin = "0px";
+            buI.style.width = "50px";
+            buI.type = "range";
+            buI.min =   0;
+            buI.max =   1;
+            buI.value = 0;
+            buI.step =  1;
+            buI.oninput = chngVew1;
+            th.appendChild(buI);
+            boL1[7] = buI;
+            chngVew1();
+
+            th = document.createElement("th");
+            th.style.width = "150px";
+            tr.appendChild(th);
+            buI = document.createElement("pre");
+            buI.style.margin = "0px";
+            buI.style.fontFamily = "inherit";
+            buI.style.fontWeight = "normal";
+            buI.style.fontSize = "20px";
+            buI.innerHTML = "samples = "+((1<<x1D)>>1);
+            th.appendChild(buI);
+            boL1[8] = buI;
+
+            buI = document.createElement("input");
+            buI.style.margin = "0px 5px";
+            buI.style.width = "150px";
+            buI.type = "range";
+            buI.min   = 0;
+            buI.max   = 1<<x1D;
+            buI.value = (1<<x1D)>>1;
+            buI.step  = 1;
+            buI.oninput =   function()
+                            {
+                                boL1[8].innerHTML = "samples = "+boL1[9].value;
+                                gpufft1DO = true;
+                                mixFFTsO  = true;
+                                rndRqst1();
+                            };
+            th.appendChild(buI);
+            boL1[9] = buI;
+
+            buI = document.createElement("input");
+            buI.style.margin = "0px 5px";
+            buI.style.width = "150px";
+            buI.type = "range";
+            buI.min =   0;
+            buI.max =   2;
+            buI.value = 1;
+            buI.step =  1/1024;
+            buI.oninput = rndRqst1;
+            th.appendChild(buI);
+            boL1[10] = buI;
+
+            //iniPreproShdr1 = function(s0)
+            //{
+            //    shaderP1b = shaderCreator(vxSh1a, s0);
+            //    shdVtx1b = gl.getAttribLocation(shaderP1b, "vtx");
+            //    shdMtx1b = gl.getUniformLocation(shaderP1b, "mtx");
+            //    shdTex1b = gl.getUniformLocation(shaderP1b, "tex");
+            //}
+            spwnCode1 = function()
+            {
+                frSh1iV = !frSh1iV;
+                         var vh = "visible";
+                if(!frSh1iV){vh = "hidden";}
+                boL1[12].style.visibility = vh;
+                boL1[11].style.visibility = vh;
+                if(!frSh1iV)
+                {
+                    frSh1fun = boL1[12].value;
+                    iniComboShdr1();
+
+                    wvltChang1O = true;
+                  //gpufft1DO   = true;
+                    mixFFTsO    = true;
+                    rndRqst1();
+                }
+            };
+
+            buI = document.createElement("div");
+            buI.style.position = "fixed";
+            buI.style.left  = "0px";
+            buI.style.top   = "0px";
+            buI.style.width = "100%";
+            buI.style.height = "100%";
+            buI.style.background = "rgba(100,100,100,0.5)";
+            buI.style.zIndex = "1";
+            buI.style.visibility = "hidden";
+            buI.onclick = spwnCode1;
+            document.body.appendChild(buI);
+            boL1[11] = buI;
+
+            buI = document.createElement("textarea");
+            buI.style.whiteSpace = "pre";
+            buI.style.wordWrap = "normal";
+            buI.style.fontFamily = "inherit";
+            buI.style.fontSize = "20px";
+            buI.style.position = "fixed";
+            buI.style.left  = "5%";
+            buI.style.top   = "5%";
+            buI.style.width = "90%";
+            buI.style.height = "90%";
+            buI.style.resize = "none";
+            buI.style.background = "rgb(229,229,229)";
+            buI.style.color = "rgb(0,0,0)";
+            buI.style.zIndex = "2";
+            buI.style.visibility = "hidden";
+            buI.style.lineHeight = "100%";
+            buI.spellcheck = false;
+            //buI.oninput = runEqu;
+            buI.value = frSh1fun;
+            document.body.appendChild(buI);
+            boL1[12] = buI;
+
+            th = document.createElement("th");
+            th.style.width = "150px";
+            tr.appendChild(th);
+            buI = document.createElement("button");
+            //buI.style.display = "block";
+            buI.style.fontFamily = "inherit";
+            buI.style.margin = "0px 5px";
+            buI.style.width = "150px";
+            buI.onclick = spwnCode1;
+            buI.innerHTML = "shaders";
+            th.appendChild(buI);
+            boL1[13] = buI;
+
+            buI = document.createElement("pre");
+            buI.style.margin = "0px";
+            buI.style.fontFamily = "inherit";
+            buI.style.fontWeight = "normal";
+            buI.style.fontSize = "20px";
+            th.appendChild(buI);
+            boL1[14] = buI;
+
+            chngAB1 = function()
+            {
+                boL1[14].innerHTML = "a = "+(boL1[15].value*1).toFixed(3);
+                wvltChang1O = true;
+              //gpufft1DO   = true;
+                mixFFTsO    = true;
+                rndRqst1();
+            }
+
+            buI = document.createElement("input");
+            //buI.style.display = "block";
+            buI.style.margin = "0px";
+            buI.style.width = "150px";
+            buI.type = "range";
+            buI.min =   0;
+            buI.max =   1;
+            buI.value = 0;
+            buI.step = 1/1024;
+            buI.oninput = chngAB1;
+            th.appendChild(buI);
+            boL1[15] = buI;
+
+            chngAB1();
+
+            
+        buI = document.createElement("input");
+        buI.style.display = "block";
+        //buI.style.position = "relative";
+        buI.style.margin = "0px";
+        buI.style.width = "99%";
+        buI.style.marginLeft = "auto";
+        buI.style.marginRight = "auto";
+        buI.type = "range";
+        buI.min = 0;
+        buI.max = 0;
+        buI.value = 0;
+        buI.step  = 1;
+        buI.oninput =   function()
+                        {
+                            gpufft1DO = true;
+                            mixFFTsO  = true;
+                            rndRqst1();
+                        };
+        document.body.appendChild(buI);
+        boL1[16] = buI;
+            
+        dv1 = document.createElement("div");
+        dv1.style.position = "relative";
+        dv1.style.width = "100%";    
+        dv1.style.height = boL1[2].value+"px";
+        dv1.style.marginLeft = "auto";
+        dv1.style.marginRight = "auto";
+        document.body.appendChild(dv1);
+        boL1[17] = dv1;
+
+        cnvs1a = document.createElement("canvas");
+        cnvs1a.style.position = "absolute";
+        cnvs1a.style.border = "0px";
+        cnvs1a.style.margin = "0px";
+        cnvs1a.style.width = "100%"; 
+        cnvs1a.style.height = "100%";
+        dv1.appendChild(cnvs1a);
+        cntx1a = cnvs1a.getContext("2d");
+
+            touchStart1 = function(e)
+            {
+                e.preventDefault();
+                var rec = e.target.getBoundingClientRect();
+                var l = e.touches;
+                var wd = screD1/rec.width;
+                inpX1 =                       l[0].clientX *wd;
+                inpY1 = (rec.top+rec.height-1-l[0].clientY)*wd;
+                camG1 = 3*(inpX1 >= 2);
+
+                //if(l.length >= 3)
+                //{
+                //    imgFile2(); reset image
+                //}
+                if(l.length == 2)
+                {
+                    inpX12 =                       l[1].clientX *wd;
+                    inpY12 = (rec.top+rec.height-1-l[1].clientY)*wd;
+                }
+                if(l.length == 1)
+                {
+                    inpXd1 = 0;
+                    inpYd1 = 0;
+                    rna1 = Math.floor(inpX1);   holdI1 = rna1;
+
+                    mauX1 = cam1[camG1+0]+(inpX1-Math.floor(inpX1))*cam1[camG1+2];
+                    mauY1 = cam1[camG1+1]+(inpY1                  )*cam1[camG1+2];
+
+                    wvltChang1O = true;
+                  //gpufft1DO   = true;
+                    mixFFTsO    = true;
+                    rndRqst1();
+                }
+            };
+            touchEnd1 = function(e)
+            {
+                holdI1 = -1;
+                e.preventDefault();
+            };
+            touchMove1 = function(e)
+            {
+                e.preventDefault();
+                var rec = e.target.getBoundingClientRect();
+                var l = e.touches;
+                var wd = screD1/rec.width;
+                var x =                       l[0].clientX *wd;
+                var y = (rec.top+rec.height-1-l[0].clientY)*wd;
+                var dx = x-inpX1;
+                var dy = y-inpY1;
+                inpXd1 -= dx;
+                inpYd1 -= dy;
+                inpX1 = x;
+                inpY1 = y;
+
+                if(l.length >= 2)
+                {
+                    var l0 = Math.sqrt(Math.pow(inpX1-inpX12,2) + 
+                                       Math.pow(inpY1-inpY12,2));
+
+                    cam1[camG1+0] -= dx*cam1[camG1+2];
+                    cam1[camG1+1] -= dy*cam1[camG1+2];
+
+                    inpX12 =                       l[1].clientX *wd;
+                    inpY12 = (rec.top+rec.height-1-l[1].clientY)*wd;
+
+                    var l1 = Math.sqrt(Math.pow(inpX1-inpX12,2) + 
+                                       Math.pow(inpY1-inpY12,2));
+
+                    var ix = inpX1;
+                    var iy = inpY1;
+                    x = cam1[camG1+0] + ix*cam1[camG1+2];
+                    y = cam1[camG1+1] + iy*cam1[camG1+2];
+                    cam1[camG1+2] *= l0/l1;
+                    cam1[camG1+0] = x - ix*cam1[camG1+2];
+                    cam1[camG1+1] = y - iy*cam1[camG1+2];
+                }
+                if(l.length == 1)
+                {
+                    rna1 = Math.floor(inpX1);
+
+                    mauX1 = cam1[camG1+0]+(inpX1-Math.floor(inpX1))*cam1[camG1+2];
+                    mauY1 = cam1[camG1+1]+(inpY1                  )*cam1[camG1+2];
+
+                    wvltChang1O = true;
+                  //gpufft1DO   = true;
+                    mixFFTsO    = true;
+                }
+
+                rndRqst1();
+            };
+            
+            mouseDown1 = function(e)
+            {
+                e.preventDefault();
+                
+                var b = e.button;
+                if(b==0) mosP1[0] = 1;
+                if(b==2) mosP1[1] = 1;
+
+                var rec = e.target.getBoundingClientRect();
+                var wd = screD1/rec.width;
+                var x =                       e.clientX *wd;
+                var y = (rec.top+rec.height-1-e.clientY)*wd;
+                inpX1 = x;
+                inpY1 = y;
+                camG1 = 3*(inpX1 >= 2);
+
+                //if(b==1)
+                //{
+                //    imgFile2(); reset image
+                //}
+                if(mosP1[1] != 0)
+                {
+                    inpXd1 = 0;
+                    inpYd1 = 0;
+                    rna1 = Math.floor(inpX1);   holdI1 = rna1;
+
+                    mauX1 = cam1[camG1+0]+(inpX1-Math.floor(inpX1))*cam1[camG1+2];
+                    mauY1 = cam1[camG1+1]+(inpY1                  )*cam1[camG1+2];
+
+                    wvltChang1O = true;
+                  //gpufft1DO   = true;
+                    mixFFTsO    = true;
+                    rndRqst1();
+                }
+            };
+            mouseUp1 = function(e)
+            {
+                e.preventDefault();
+                var b = e.button;
+                if(b==0) {mosP1[0] = 0;}
+                if(b==2) {mosP1[1] = 0; holdI1 = -1;}
+            };
+            mouseMove1 = function(e)
+            {
+                var rec = e.target.getBoundingClientRect();
+                var wd = screD1/rec.width;
+                var x =                       e.clientX *wd;
+                var y = (rec.top+rec.height-1-e.clientY)*wd;
+                var dx = x-inpX1;
+                var dy = y-inpY1;
+                inpXd1 -= dx;
+                inpYd1 -= dy;
+                inpX1 = x;
+                inpY1 = y;
+
+                if(mosP1[0] != 0)
+                {
+                    cam1[camG1+0] -= dx*cam1[camG1+2];
+                    cam1[camG1+1] -= dy*cam1[camG1+2];
+                }
+                if(mosP1[1] != 0)
+                {
+                    rna1 = Math.floor(inpX1);
+
+                    mauX1 = cam1[camG1+0]+(inpX1-Math.floor(inpX1))*cam1[camG1+2];
+                    mauY1 = cam1[camG1+1]+(inpY1                  )*cam1[camG1+2];
+
+                    wvltChang1O = true;
+                  //gpufft1DO   = true;
+                    mixFFTsO    = true;
+                }
+                rndRqst1();
+            };
+            mouseWheel1 = function(e)
+            {
+                e.preventDefault();
+
+                var z = 1;
+                if(e.deltaY>0){z =   1.125;}
+                if(e.deltaY<0){z = 1/1.125;}
+
+                camG1 = 3*(inpX1 >= 2);
+                var ix = inpX1; ix = ix-Math.floor(ix);
+                var iy = inpY1;
+                var ol = cam1[camG1+2];
+                var ne = cam1[camG1+2] * z; 
+                         cam1[camG1+2] = ne;
+                var ch = ol-ne;
+                cam1[camG1+0] += ix*ch;
+                cam1[camG1+1] += iy*ch;
+
+                rndRqst1();
+            };
+            
+            cnvs1a.addEventListener("touchstart",  touchStart1,  true);
+            cnvs1a.addEventListener("touchend",    touchEnd1,    true);
+            cnvs1a.addEventListener("touchcancel", touchEnd1,    true);
+            cnvs1a.addEventListener("touchmove",   touchMove1,   true);
+
+            cnvs1a.addEventListener("mousedown",   mouseDown1,   true);
+            cnvs1a.addEventListener("mouseup",     mouseUp1,     true);
+            cnvs1a.addEventListener("mouseout",    mouseUp1,     true);
+            cnvs1a.addEventListener("mouseleave",  mouseUp1,     true);
+            cnvs1a.addEventListener("mousemove",   mouseMove1,   true);
+            cnvs1a.addEventListener("wheel",       mouseWheel1,  true);
+
+            cnvs1a.addEventListener("contextmenu", event => event.preventDefault());
+
+            //drop = function(e)
+            //{
+            //    e.preventDefault();
+            //    if(e.dataTransfer.files.length!=0) {imgEml9.src = URL.createObjectURL(e.dataTransfer.files[0]);}
+            //    else                               {imgEml9.src = e.dataTransfer.getData("URL");}
+            //    imgEml9.onload = imgFile1;
+            //    cam1[0] = 0;
+            //    cam1[1] = 0;
+            //    cam1[2] = 1;
+            //    cam1[3] = 0;
+            //    cam1[4] = 0;
+            //    cam1[5] = 1;
+            //}
+            //drop2 = function(e)
+            //{
+            //    e.preventDefault();
+            //}
+            //cnvs1a.ondrop = drop;
+            //cnvs1a.ondragover = drop2;
+
+        dropSound = function(e)
+        {
+            e.preventDefault();
+            if(e.dataTransfer.files.length!=0)
+            {
+                iniAudio();
+                e.dataTransfer.files[0].arrayBuffer()
+                .then(arrBff    => sQx.decodeAudioData(arrBff))
+                .then(audioBff  => formatAudio(audioBff));
+            }
+            else
+            {
+                xmlhr = new XMLHttpRequest();
+                xmlhr.responseType = "arraybuffer";
+                xmlhr.open("GET", e.dataTransfer.getData("URL"), true);
+                xmlhr.onload = function() {
+                    sQx.decodeAudioData(xmlhr.response)
+                    .then(audioBff => formatAudio(audioBff));
+                }
+                xmlhr.send();
+            }
+        }
+        dropSound2 = function(e)
+        {
+            e.preventDefault();
+        }
+        cnvs1a.ondrop = dropSound;
+        cnvs1a.ondragover = dropSound2;
+
+        buI = document.createElement("pre");
+        buI.style.fontFamily = "inherit";
+        buI.style.fontSize = fnz;
+        buI.style.margin = "20px 0px";
+        buI.style.textAlign = "center";
+        buI.innerHTML = "the first left columns in the visualization look different                   \n"+
+                        "these do the 1D stair process of mixing squares with circles shown previously\n"+
+                        "each sound channel is represented by the color green or blue                 \n"+
+                        "\n"+
+                        "the slider stp = 2<sup>x</sup> controls doing the 1D FFT every stp sound samples\n"+
+                        "\n"+
+                        "the bottom slider to the right of stp shows 4 different visualizations:\n"+
+                        "the \"y\" of y*e<sup>i*&#120587;*2*x</sup>                               \n"+
+                        "the \"x\" of y*e<sup>i*&#120587;*2*x</sup>                               \n"+
+                        "the REAL      part of y*cos(&#120587;*2*x) + y*sin(&#120587;*2*x)*i\n"+
+                        "the IMAGINARY part of y*cos(&#120587;*2*x) + y*sin(&#120587;*2*x)*i\n"+
+                        "\n"+
+                        "you can preprocess each 2<sup>x</sup> sound samples using the [preprocess] button\n"+
+                        "preprocess means to process before doing the 1D FFT";
+                        
+         
+        //document.body.appendChild(buI);
+
+        //chngLVL1();
+        resChng1();
+    }
+    function rndRqst1()
+    {
+        if(rndC1){return;}
+           rndC1 = true;
+        requestAnimationFrame(render1aGl);
+    }
+    function render1aGl()//render
+    {
+        rndC1 = false;
+        
+        wvltChang1();
+        gpufft1D();
+        mixFFTs();
+
+        var pxrt = window.devicePixelRatio;
+        var rect = cnvs1a.getBoundingClientRect();
+        var xrz = rect.width *pxrt;
+        var yrz = rect.height*pxrt;
+        cnvs0.width  = xrz;
+        cnvs0.height = yrz;
+        cnvs1a.width  = xrz;
+        cnvs1a.height = yrz;
+
+        var x = 1<<x1D;
+
+        shdMtx[ 0] =   x;
+        shdMtx[ 1] = 1/x;
+        shdMtx[ 2] = mauX1;
+        shdMtx[ 3] = mauY1;
+        shdMtx[ 4] = boL1[15].value*1;
+        shdMtx[ 5] = cam1[0];
+        shdMtx[ 6] = cam1[1];
+        shdMtx[ 7] = cam1[2];
+        shdMtx[ 8] = cam1[3];
+        shdMtx[ 9] = cam1[4];
+        shdMtx[10] = cam1[5];
+        shdMtx[11] = yrz/xrz;
+        shdMtx[12] = 2/(2-boL1[10].value)-1;
+        shdMtx[13] = boL1[7].value;
+
+        gl.viewport(0, 0, xrz, yrz);
+
+        //gl.clearColor(.9,.9,.9,1);
+        //gl.clearDepth(0);
+        //gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.useProgram(shaderP1f);
+        gl.uniform1i(shdTex1f, 6+cnv);
+        gl.uniformMatrix4fv(shdMtx1f, false, shdMtx);
+        gl.vertexAttribPointer(shdVtx1f, 1, gl.FLOAT, 0, 0, 0);
+        gl.enableVertexAttribArray(shdVtx1f);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        cntx1a.drawImage(cnvs0, 0, 0);
+    }
+
+    var PI = 3.1415926535897932384626433832795;
+</script>
+</body>
+</html>
