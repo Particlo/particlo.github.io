@@ -1,0 +1,888 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>TriMath</title>
+</head>
+
+<body>
+    <script>
+
+    // file:///C:/Users/myname/Desktop/TriMath/TriMath.html
+
+    world = new Object();
+    world.ini = function()
+    {
+        world.elewd   = 512+256;                        //width of html elments
+        world.triNT   = 6;                              //triangles to fit per row
+        world.triRZ   = world.elewd/world.triNT | 0;    //triangle size
+        world.fontFam = "Consolas,Courier";
+        world.cam2D   = new Float32Array([0,0, 4]);     //camera 2D position and zoom
+        world.dgtCol  = "#444444";                      //ball color of digits
+        world.tmp     = new Float64Array(64);           //temporal buffer for some operations
+
+        document.body.style.background = "#000000";
+
+        let container = document.createElement("div");
+        container.style.margin   = "0px";
+        container.style.padding  = "0px";
+        container.style.margin   = "0 auto";
+        container.style.width    = world.elewd-4+"px";
+        document.body.appendChild(container);
+        world.container = container;
+
+        world.adjustElms = function(){
+            world.txtE.style.height = "0px";        //dont remove this line
+            world.txtE.style.height = world.txtE.scrollHeight+"px";
+        };
+        world.updatedText = function(){
+            world.adjustElms();
+            world.getchars();
+            world.triDraw1D();
+            world.triBuild2D();
+        };
+        world.txtE = document.createElement("textarea");
+        world.txtE.style.float      = "inline-start";
+        world.txtE.style.background = "#333333";
+        world.txtE.style.outline    = "none";
+        world.txtE.style.color    = "#FFFFFF";
+        world.txtE.style.margin   = "0px";
+        world.txtE.style.padding  = "0px 13px";
+        world.txtE.style.border   = "2px solid #555555";
+        world.txtE.style.borderRadius = "4px";
+        world.txtE.style.width    = world.elewd-4-26+"px";
+        world.txtE.style.fontSize = (world.elewd/16.4 | 0)+"px";
+        world.txtE.style.fontFamily = world.fontFam;
+        world.txtE.style.resize   = "none";
+        world.txtE.style.overflow = "hidden";
+        world.txtE.style.display  = "block";
+        world.txtE.value          = "+abc *abc ^abc";
+        world.txtE.onfocus        = function(){world.txtE.style.border = "2px solid #999999";};
+        world.txtE.onblur         = function(){world.txtE.style.border = "2px solid #555555";};
+        world.txtE.oninput        = world.updatedText;
+        container.appendChild(world.txtE);
+        world.txtE.focus();
+
+        world.cnv1D = document.createElement("canvas");
+        world.cnv1D.style.float   = "inline-start";
+        world.cnv1D.style.margin  = "0px";
+        world.cnv1D.style.padding = "0px";
+        world.cnv1D.style.border  = "0px";
+        world.cnv1D.style.borderRadius = "4px";
+        world.cnv1D.style.display = "inline-block";
+        world.cnv1D.style.width   = world.elewd+"px";
+        world.cnv1D.style.height  = world.triRZ+"px";
+        world.cnv1D.width         = world.elewd;
+        world.cnv1D.height        = world.triRZ;
+        container.appendChild(world.cnv1D);
+        world.ctx1D              = world.cnv1D.getContext("2d");
+        world.ctx1D.textAlign    = "center";
+        world.ctx1D.textBaseline = "middle";
+        
+        world.cnv2D = document.createElement("canvas");
+        world.cnv2D.style.float   = "inline-start";
+        world.cnv2D.style.margin  = "0px";
+        world.cnv2D.style.padding = "0px";
+        world.cnv2D.style.border  = "0px";
+        world.cnv2D.style.borderRadius = "4px";
+        world.cnv2D.style.display = "inline-block";
+        world.cnv2D.style.width   = world.elewd+"px";
+        world.cnv2D.style.height  = world.elewd+"px";
+        world.cnv2D.width         = world.elewd;
+        world.cnv2D.height        = world.elewd;
+        container.appendChild(world.cnv2D);
+        world.ctx2D              = world.cnv2D.getContext("2d");
+        world.ctx2D.textAlign    = "center";
+        world.ctx2D.textBaseline = "middle";
+
+        //add equation images
+        let lpz = [
+            .230,.060,  .010, .002,  1, "+xyz",
+            .230,.060,  .010,-.061,  1, "+zyx",
+            .315,.060, -.252, .003,  1, "+xya +yxa",
+            .190,.060, -.248,-.059,  1, "+x70",
+            .385,.060, -.603,-.003,  1, "+01a +a2b +b36",
+            .210,.060,  .010,-.120,  1, "*xyz",
+            .160,.136,  .010,-.170,  1, "*zyx",
+            .530,.059, -.473,-.066,  1, "+yza *xab *xyc *xzd +cdb",
+            .300,.120, -.206,-.110,  1, "*xba *ydc *xyz *aci *bdj *zji",
+            .179,.060,  .012,-.299,  1, "^xyz",
+            .194,.060,  .008,-.367,  1, "^zyx",
+            .261,.060, -.005,-.437,  1, "^yzx",
+            .262,.060, -.201,-.226,  1, "^bcx ^bdy *xyz +cdi ^biz",
+            .215,.105, -.201,-.292,  1, "^bcx ^bdy *iyx +jdc ^bji",
+            .177,.105, -.429,-.295,  1, "+nx0 ^bxy ^bnz *yz1",
+            .228,.088, -.618,-.309,  1, "^ayx *by1 ^xba",
+            .244,.086, -.462,-.223,  1, "^bci ^idj *cdk ^bkj",
+            .266,.070, -.256,-.387,  1, "*bcx ^xny ^bni ^cnj *ijy",
+            .342,.076, -.508,-.390,  1, "^biy ^xia ^bjx ^yja",
+        ];
+        let r   = 0;
+        for(let i = 0; i < lpz.length/6|0; i++)
+        {
+            let wi0 = lpz[r];    r++;
+            let he0 = lpz[r];    r++;
+            let px0 = lpz[r];    r++;
+            let py0 = lpz[r];    r++;
+            let sz0 = lpz[r];    r++;
+            let str = lpz[r];    r++;
+
+            let wi = wi0*world.elewd|0;
+            let he = he0*world.elewd|0;
+            let px = px0*world.elewd|0;
+            let py = py0*world.elewd|0;
+            let sz = sz0*world.elewd|0;
+
+            let div = document.createElement("button");
+            div.style.float              = "inline-start";
+            div.style.margin             = "4px 4px 0px 0px";
+            div.style.padding            = "0px";
+            div.style.border             = "0px";
+            div.style.width              = wi+"px";
+            div.style.height             = he+"px";
+            div.style.backgroundColor    = "rgb(30,30,30)";
+            div.style.backgroundImage    = "url('equations.png')";
+            div.style.backgroundClip     = "content-box";
+            div.style.backgroundRepeat   = "no-repeat";
+            div.style.backgroundPosition = px+"px "+py+"px";
+            div.style.backgroundSize     = sz+"px";
+            div.style.borderRadius       = "8px";
+            div.mySavedString            = str;
+            div.onclick                  = function(e){world.txtE.value = e.target.mySavedString;  world.updatedText();};
+            container.appendChild(div);
+
+            //code used to adjust image with keys fast (website construction)
+            //world.adjst = new Object();
+            //world.adjst.el = div;
+            //world.adjst.wi = wi0;
+            //world.adjst.he = he0;
+            //world.adjst.px = px0;
+            //world.adjst.py = py0;
+        }
+
+        world.adjustElms();
+        world.getchars();
+        world.triDraw1D();
+        world.triBuild2D();
+        world.triDraw2D();
+
+        //window.onresize = function(){
+        //};
+    };
+    world.getchars = function()
+    {
+        //extract data from textarea element
+        let chrs = [...world.txtE.value];
+            chrs = world.removeElem(chrs," ");
+            chrs = world.removeElem(chrs,"\n");
+        let chrs2 = [];
+        for(let i = 0; i < Math.floor(chrs.length/4)*4; i++)//remove incomplete tris
+        {
+            chrs2.push(chrs[i]);
+        }   chrs = chrs2;
+        chrs2 = [];
+        for(let i = 0; i < chrs.length; i++)//remove function names
+        {
+            if((i&3) != 0){chrs2.push(chrs[i]);}
+        }
+        let unq = world.removeRepeats(chrs2);
+        world.totUchars = unq.length; //save total unique characters before removing number characters from unq
+        let unq2 = [];
+        for(let i = 0; i < unq.length; i++)//remove number characters from unq
+        {
+            let a = unq[i];
+            if(!world.itisDigit(a)){unq2.push(a);}
+        }   unq = unq2;
+        world.triN  = chrs.length/4 | 0;
+        world.chrs  = chrs;
+        world.chrs2 = chrs2;
+        world.unq   = unq;
+        world.unqN  = world.countRepeats(unq,chrs);
+        world.unqMx = world.maxOnArr(world.unqN);
+    };
+    world.triDraw1D = function()
+    {
+        let cnh = (world.triN/world.triNT | 0) + (world.triN%world.triNT != 0)*1;
+            cnh = cnh*world.triRZ;
+        world.cnv1D.style.height = cnh+"px";
+        world.cnv1D.height       = cnh;
+
+        let chrs = world.chrs;
+        let unq  = world.unq;
+
+        let trz   = world.triRZ;
+        let trzR1 = world.triRZ*.30 | 0;
+        let trzR2 = world.triRZ*.15 | 0;
+        let trzR3 = world.triRZ*.4 | 0;
+        let wid = world.cnv1D.width;
+        let hei = world.cnv1D.height;
+        let ctx = world.ctx1D;
+        let s  = .5;//circles separation from center
+        let wx = 0;
+        let wy = trz*.06 | 0;
+        let v0 = trz*.5                  | 0;
+        let v1 = trz*.5 - s*trz*.5       | 0;
+        let v2 = trz*.5 + s*trz*.5       | 0;
+        let v3 = trz*.5 + s*trz*.866*1/3 | 0;
+        let v4 = trz*.5 - s*trz*.866*2/3 | 0;
+
+        //clear
+        ctx.fillStyle = "#222222";
+        ctx.rect(0, 0, wid, hei);
+        ctx.fill();
+
+        ctx.lineWidth    = world.triRZ*.1 | 0;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+        ctx.font         = (world.triRZ*.25 | 0) +"px "+world.fontFam;
+
+        for(let i = 0; i < world.triN; i++)
+        {
+            //center
+            if(chrs[i*4+0] === "+")
+            {
+                ctx.beginPath();
+                ctx.arc(wx + v0, wy + v0, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+                let grd1 = ctx.createRadialGradient(wx + v0, wy + v0 - trzR1,0,  wx + v0, wy + v0 - trzR1, trzR1*2);
+                    grd1.addColorStop(1, world.oklch(.7, .1, .4));
+                    grd1.addColorStop(.6,"#444444");
+                    grd1.addColorStop(0, "#666666");
+                ctx.fillStyle = grd1;
+                ctx.fill();
+            }
+            else if(chrs[i*4+0] === "*")
+            {
+                ctx.beginPath();
+                ctx.arc(wx + v0, wy + v0, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+                let grd1 = ctx.createRadialGradient(wx + v0, wy + v0 - trzR1,0,  wx + v0, wy + v0 - trzR1, trzR1*2);
+                    grd1.addColorStop(1, world.oklch(.7, .1, .6));
+                    grd1.addColorStop(.6,"#444444");
+                    grd1.addColorStop(0, "#666666");
+                ctx.fillStyle = grd1;
+                ctx.fill();
+            }
+            else if(chrs[i*4+0] === "^")
+            {
+                ctx.beginPath();
+                ctx.arc(wx + v0, wy + v0, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+
+                let grd1 = ctx.createRadialGradient(wx + v0, wy + v0 - trzR1,0,  wx + v0, wy + v0 - trzR1, trzR1*2);
+                    grd1.addColorStop(.6, "#444444");
+                    grd1.addColorStop(0, "#666666");
+                let grd2 = ctx.createRadialGradient(wx + v1, wy + v3, 0, wx + v1, wy + v3, trzR3);
+                    grd2.addColorStop(0, "#1155AAFF");
+                    grd2.addColorStop(1, "#33333300");
+                let grd3 = ctx.createRadialGradient(wx + v2, wy + v3, 0, wx + v2, wy + v3, trzR3);
+                    grd3.addColorStop(0, "#AA5511FF");
+                    grd3.addColorStop(1, "#33333300");
+
+                ctx.fillStyle = grd1;
+                ctx.fill();
+                ctx.fillStyle = grd2;
+                ctx.fill();
+                ctx.fillStyle = grd3;
+                ctx.fill();
+            }
+            else
+            {
+                ctx.beginPath();
+                ctx.arc(wx + v0, wy + v0, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+                ctx.fillStyle = "#333333";
+                ctx.fill();
+            }
+
+            let an1 = world.getPosArr(unq,chrs[i*4+1])/unq.length;
+            let an2 = world.getPosArr(unq,chrs[i*4+2])/unq.length;
+            let an3 = world.getPosArr(unq,chrs[i*4+3])/unq.length;
+            
+            //left
+            ctx.fillStyle = world.oklch(.6, .1, an1);  if(an1<0){ctx.fillStyle = world.dgtCol;}
+            ctx.beginPath();
+            ctx.arc(wx + v1, wy + v3, trzR2, 0,2*Math.PI);
+            ctx.closePath();
+            ctx.fill();
+            //right
+            ctx.fillStyle = world.oklch(.6, .1, an2);  if(an2<0){ctx.fillStyle = world.dgtCol;}
+            ctx.beginPath();
+            ctx.arc(wx + v2, wy + v3, trzR2, 0,2*Math.PI);
+            ctx.closePath();
+            ctx.fill();
+            //up
+            ctx.fillStyle = world.oklch(.6, .1, an3);  if(an3<0){ctx.fillStyle = world.dgtCol;}
+            ctx.beginPath();
+            ctx.arc(wx + v0, wy + v4, trzR2, 0,2*Math.PI);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.fillStyle = "#FFFFFF";
+            ctx.fillText(chrs[i*4+0], wx + v0, wy + v0);//triangle name
+            ctx.fillText(chrs[i*4+1], wx + v1, wy + v3);//variable name
+            ctx.fillText(chrs[i*4+2], wx + v2, wy + v3);//variable name
+            ctx.fillText(chrs[i*4+3], wx + v0, wy + v4);//variable name
+
+            wx += world.triRZ;
+            if(i % world.triNT == (world.triNT-1))
+            {
+                wx = 0;
+                wy+= world.triRZ;
+            }
+        }
+    };
+    world.triBuild2D = function()
+    {
+        world.lsub = 1;
+        let sudiv  = world.lsub;          //subdivisions of link between equal balls
+        let thl    = .8/sudiv;
+        let cb = 0;//count total helper balls
+        let cl = 0;//count total helper links
+        for(let i = 0; i < world.unqN.length; i++)
+        {
+            let n = world.unqN[i];
+            cb += n*sudiv + 1;
+            cl += n*(sudiv+1)*(n!=1);
+        }
+        //ball color from repeated list
+        world.bcol = new Array(world.triN*3);
+        for(let i = 0; i < world.bcol.length; i++)
+        {
+            let s = world.getPosArr(world.unq,world.chrs2[i])/world.unq.length;
+            let c = world.oklch(.6, .1, s);
+            if(s<0){c = world.dgtCol;}
+            world.bcol[i] = c;
+        }
+        //ball color from unique list
+        world.bcolU = new Array(world.unq.length);
+        for(let i = 0; i < world.bcolU.length; i++)
+        {
+            world.bcolU[i] = world.oklch(.6, .1, i/world.unq.length);
+        }
+        //each ball has 2D position
+        world.p2D = new Float32Array((world.triN*3 + cb)*2);
+        for(let i = 0; i < world.triN; i++)
+        {
+            let i6 = i*6;
+            let xr = Math.random()*2-1  + 3;
+            let yr = Math.random()*2-1  + 3;
+            world.p2D[i6+0] = xr - 1;
+            world.p2D[i6+1] = yr + 0;
+            world.p2D[i6+2] = xr + 1;
+            world.p2D[i6+3] = yr + 0;
+            world.p2D[i6+4] = xr + 0;
+            world.p2D[i6+5] = yr - 1;
+        }
+        for(let i = world.triN*3*2; i < world.p2D.length; i++)
+        {
+            world.p2D[i] = Math.random()*2-1;
+        }
+        //each link has 2 ballID and 1 length and 1 unqID
+        world.lkZ = 3;
+        world.l2D = new Float32Array(cl*world.lkZ);
+        let w = 0;
+        let co = new Uint32Array(world.unqMx);
+        let be = world.triN*3;//start location of ball group
+        for(let i = 0; i < world.unqN.length; i++)   //fill helper links
+        {
+            if(world.unqN[i]==1){continue;}
+            let thl2 = thl;  if(world.unqN[i]==2){thl2 *= .5;}
+            let bm = be;    //save middle ball
+            be++;           //jump middle ball
+            for(let j = 0; j < world.unqN[i]; j++){
+            for(let k = 0; k <       sudiv-1; k++){
+                world.l2D[w] = be+0;    w++;
+                world.l2D[w] = be+1;    w++;
+                world.l2D[w] = thl2;    w++;    be++;
+            }                                   be++;}
+            be -= world.unqN[i]*sudiv;
+            //links that connect to middle ball
+            for(let j = 0; j < world.unqN[i]; j++){
+                world.l2D[w] = bm;      w++;
+                world.l2D[w] = be;      w++;    be += sudiv;
+                world.l2D[w] = thl2;    w++;
+            }
+            be = be - (world.unqN[i]*sudiv) + sudiv-1;
+            let uni = world.unq[i];
+            //links that connect "link ends" to triangle balls
+            for(let j = 0; j < world.chrs2.length; j++){  if(world.chrs2[j] !== uni){continue;}
+                world.l2D[w] = j;       w++;
+                world.l2D[w] = be;      w++;    be += sudiv;
+                world.l2D[w] = thl2;    w++;
+            }
+            be = bm + world.unqN[i]*sudiv + 1;
+        }
+        //find if summ or mult input variables need to flip to release tension in the graph
+        world.flpZ = 3;//each flipData has 2 ballID and 1 timer
+        world.flpD = new Int32Array(world.triN*world.flpZ);
+        for(let i = 0; i < world.triN; i++)
+        {
+            let a = 0;
+            if(world.chrs[i*4+0]==="^"){a = -1;}//mark not flipable
+            world.flpD[i*world.flpZ + 0] =-1;//-1 means there is no link
+            world.flpD[i*world.flpZ + 1] =-1;
+            world.flpD[i*world.flpZ + 2] = a;
+        }
+        for(let i = 0; i < cl; i++)
+        {
+            let b1 = world.l2D[i*world.lkZ+0];
+            let b2 = world.l2D[i*world.lkZ+1];
+            let md = b1 % 3;
+            if(b1 >= world.triN*3 || md==2){continue;}
+            let w = b1/3 | 0;
+                w = w*world.flpZ + md;
+            world.flpD[w] = b2;//set closest connected invisible ball
+        }
+        //mark repulsions to skip
+        let count = 0;
+        for(let i = 1; i < world.triN; i++){
+        for(let j = 0; j <          i; j++){
+            for(let bi = 0; bi < 3; bi++){
+            for(let bj = 0; bj < 3; bj++){  count++;
+            }}
+        }}
+        world.repulDo = new Uint8Array(count);
+        count = 0;
+        for(let i = 1; i < world.triN; i++){
+        for(let j = 0; j <          i; j++){
+            for(let bi = 0; bi < 3; bi++){
+            for(let bj = 0; bj < 3; bj++){
+                let ch1 = world.chrs2[i*3+bi];
+                let ch2 = world.chrs2[j*3+bj];
+                world.repulDo[count] = ((ch1 != ch2) || world.itisDigit(ch1) || world.itisDigit(ch2))*1;    count++;
+            }}
+        }}
+    };
+    world.triStep2D = function()
+    {
+        //accumulate timers to flip balls to untangle links
+        for(let i = 0; i < world.triN; i++)
+        {
+            let r   = i*world.flpZ;
+            let bi1 = world.flpD[r + 0];
+            let bi2 = world.flpD[r + 1];
+            let tim = world.flpD[r + 2];
+            if(tim<0 || bi1<0 || bi2<0){continue;}
+            let b1 = i*3+0;
+            let b2 = i*3+1;
+            let xp1 = world.p2D[b1*2+0];
+            let yp1 = world.p2D[b1*2+1];
+            let xp2 = world.p2D[b2*2+0];
+            let yp2 = world.p2D[b2*2+1];
+            let xpi1 = world.p2D[bi1*2+0];
+            let ypi1 = world.p2D[bi1*2+1];
+            let xpi2 = world.p2D[bi2*2+0];
+            let ypi2 = world.p2D[bi2*2+1];
+            let xm = xp1 - xp2;
+            let ym = yp1 - yp2;
+            let x1 = xpi1 - xp1;
+            let y1 = ypi1 - yp1;
+            let x2 = xpi2 - xp2;
+            let y2 = ypi2 - yp2;
+            let dt1 = -y1*x2 + x1*y2;
+            let dt2 = -y1*xm + x1*ym;  if(dt2<0){dt1*=-1;}
+            if(dt1<.1){world.flpD[r + 2] = 0; continue;}//reset timer when links not tangled
+            world.flpD[r + 2] += 1;
+            if(world.flpD[r + 2]<1444){continue;}//timer not activated
+            //reset timer
+            world.flpD[r + 2] = 0;
+            //flip balls
+            world.p2D[b1*2+0] = xp2;
+            world.p2D[b1*2+1] = yp2;
+            world.p2D[b2*2+0] = xp1;
+            world.p2D[b2*2+1] = yp1;
+        }
+        let tril = 1*.5;                   //triangle distance between balls
+        let tris = .5;                     //triangle speed of reconstruct
+        //apply atraction of tris balls
+        for(let i = 0; i < world.triN; i++)
+        {
+            for(let j = 0; j < 3; j++)
+            {
+                let b1 = i*3+(j+0)%3;
+                let b2 = i*3+(j+1)%3;
+                let x1 = world.p2D[b1*2+0];
+                let y1 = world.p2D[b1*2+1];
+                let x2 = world.p2D[b2*2+0];
+                let y2 = world.p2D[b2*2+1];
+                let xm = (x1+x2)*.5;
+                let ym = (y1+y2)*.5;
+                let xv = x1-x2;
+                let yv = y1-y2;
+                let lv = Math.sqrt(xv*xv + yv*yv);  if(lv!=0){lv = tril/lv;}
+                xv *= lv;
+                yv *= lv;
+                world.p2D[b1*2+0] = x1 + ((xm+xv) - x1)*tris;
+                world.p2D[b1*2+1] = y1 + ((ym+yv) - y1)*tris;
+                world.p2D[b2*2+0] = x2 + ((xm-xv) - x2)*tris;
+                world.p2D[b2*2+1] = y2 + ((ym-yv) - y2)*tris;
+            }
+        }
+        //apply atraction of links
+        let t = world.l2D.length/world.lkZ;
+        for(let i = 0; i < t; i++)
+        {
+            let b1 = world.l2D[i*world.lkZ+0];
+            let b2 = world.l2D[i*world.lkZ+1];
+            let l  = world.l2D[i*world.lkZ+2];
+            let x1 = world.p2D[b1*2+0];
+            let y1 = world.p2D[b1*2+1];
+            let x2 = world.p2D[b2*2+0];
+            let y2 = world.p2D[b2*2+1];
+            let xm = (x1+x2)*.5;
+            let ym = (y1+y2)*.5;
+            let xv = x1-x2;
+            let yv = y1-y2;
+            let lv = Math.sqrt(xv*xv + yv*yv);
+            let ld = 0;  if(lv!=0){ld = 1/lv;}  ld *= l*.5;
+            let m = .5;  if(lv<l*.5){m = 0;}
+            xv *= ld;
+            yv *= ld;
+            world.p2D[b1*2+0] = x1 + ((xm+xv) - x1)*m;
+            world.p2D[b1*2+1] = y1 + ((ym+yv) - y1)*m;
+            world.p2D[b2*2+0] = x2 + ((xm-xv) - x2)*m;
+            world.p2D[b2*2+1] = y2 + ((ym-yv) - y2)*m;
+        }
+        //apply repulsion between tris balls
+        let cnt = 0;
+        let tuf = .03/world.totUchars;
+        for(let i = 1; i < world.triN; i++){
+        for(let j = 0; j <          i; j++){
+            for(let bi = 0; bi < 3; bi++){
+            for(let bj = 0; bj < 3; bj++){      let skp = world.repulDo[cnt]==0;  cnt++;  if(skp){continue;}
+                let b1 = i*3+bi;
+                let b2 = j*3+bj;
+                let x1 = world.p2D[b1*2+0];
+                let y1 = world.p2D[b1*2+1];
+                let x2 = world.p2D[b2*2+0];
+                let y2 = world.p2D[b2*2+1];
+                let xm = (x1+x2)*.5;
+                let ym = (y1+y2)*.5;
+                let xv = x1-x2;
+                let yv = y1-y2;
+                let lv = Math.sqrt(xv*xv + yv*yv);
+                let ld = 0;  if(lv!=0){ld = 1/lv;}
+                xv *= ld;
+                yv *= ld;
+                //if(world.chrs2[b1] == world.chrs2[b2])//atract
+                //{
+                //    let a = Math.max(0,lv-3);
+                //    xv *= a;
+                //    yv *= a;
+                //    x1 += ((xm+xv) - x1)*.5;
+                //    y1 += ((ym+yv) - y1)*.5;
+                //    x2 += ((xm-xv) - x2)*.5;
+                //    y2 += ((ym-yv) - y2)*.5;
+                //}
+                //else//repel
+                {
+                    x1 += xv*tuf;
+                    y1 += yv*tuf;
+                    x2 -= xv*tuf;
+                    y2 -= yv*tuf;
+                }
+                world.p2D[b1*2+0] = x1;
+                world.p2D[b1*2+1] = y1;
+                world.p2D[b2*2+0] = x2;
+                world.p2D[b2*2+1] = y2;
+            }}
+        }}
+    };
+    world.triDraw2D = function()
+    {
+        for(let i = 0; i < 8; i++){world.triStep2D();}
+
+        let wid  = world.cnv2D.width;
+        let hei  = world.cnv2D.height;
+        let ctx  = world.ctx2D;
+        let cam  = world.cam2D;
+        let chrs = world.chrs;
+        let unq  = world.unq;
+
+        cam[0] = 0;
+        cam[1] = 0;
+        for(let i = 0; i < world.triN*3; i++)
+        {
+            cam[0] += world.p2D[i*2+0];
+            cam[1] += world.p2D[i*2+1];
+        }
+        let dv3 = 1/(world.triN*3);
+        cam[0]*= dv3;
+        cam[1]*= dv3;
+        cam[2] = 0;
+        for(let i = 0; i < world.triN*3; i++)
+        {
+            let x = world.p2D[i*2+0]-cam[0];
+            let y = world.p2D[i*2+1]-cam[1];
+            cam[2] = Math.max(cam[2], Math.sqrt(x*x + y*y));
+        }   cam[2]+= 1;
+
+        let cm    = .5/cam[2]*hei;
+        let trz   = 2*cm;
+        let trzR1 = trz*.30;
+        let trzR2 = trz*.15;
+        let trzR3 = trz*.4 ;
+        let trzR4 = trz*.07;
+        
+        //clear
+        ctx.fillStyle = "#111111";
+        ctx.rect(0, 0, wid, hei);
+        ctx.fill();
+
+        ctx.lineWidth    = trz*.1;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+        ctx.font         = (trz*.25 | 0) +"px "+world.fontFam;
+        //draw helper links
+        let r0 = 0;
+        for(let i = 0; i < world.unqN.length; i++){  if(world.unqN[i]==1){continue;}
+            ctx.strokeStyle = world.bcolU[i];
+            let tos = world.unqN[i]*(world.lsub+1);
+        for(let j = 0; j < tos; j++){
+            let r2 = r0*world.lkZ;      r0++;  
+            let b1 = world.l2D[r2+0];
+            let b2 = world.l2D[r2+1];
+            let x1 = world.p2D[b1*2+0];
+            let y1 = world.p2D[b1*2+1];
+            let x2 = world.p2D[b2*2+0];
+            let y2 = world.p2D[b2*2+1];
+            let x1i = ((x1 - cam[0])/cam[2]*hei + wid)*.5;
+            let y1i = ((y1 - cam[1])/cam[2]*hei + hei)*.5;
+            let x2i = ((x2 - cam[0])/cam[2]*hei + wid)*.5;
+            let y2i = ((y2 - cam[1])/cam[2]*hei + hei)*.5;
+            ctx.lineWidth = trzR4;
+            ctx.beginPath();
+            ctx.moveTo(x1i,y1i);
+            ctx.lineTo(x2i,y2i);
+            ctx.closePath();
+            ctx.stroke();
+        }}
+        //draw tris middle ball
+        for(let i = 0; i < world.triN; i++)
+        {
+            let i30 = i*3 + 0;
+            let i31 = i*3 + 1;
+            let i32 = i*3 + 2;
+            let x0 = world.p2D[i30*2+0];
+            let y0 = world.p2D[i30*2+1];
+            let x1 = world.p2D[i31*2+0];
+            let y1 = world.p2D[i31*2+1];
+            let x2 = world.p2D[i32*2+0];
+            let y2 = world.p2D[i32*2+1];
+            let xc = (x0 + x1 + x2)/3;
+            let yc = (y0 + y1 + y2)/3;
+            let xu = x2-xc;
+            let yu = y2-yc;
+            let xci = ((xc    - cam[0])/cam[2]*hei + wid)*.5;
+            let yci = ((yc    - cam[1])/cam[2]*hei + hei)*.5;
+            let x0i = ((x0    - cam[0])/cam[2]*hei + wid)*.5;
+            let y0i = ((y0    - cam[1])/cam[2]*hei + hei)*.5;
+            let x1i = ((x1    - cam[0])/cam[2]*hei + wid)*.5;
+            let y1i = ((y1    - cam[1])/cam[2]*hei + hei)*.5;
+            let x2i = ((x2    - cam[0])/cam[2]*hei + wid)*.5;
+            let y2i = ((y2    - cam[1])/cam[2]*hei + hei)*.5;
+            let xdi = ((xc-xu - cam[0])/cam[2]*hei + wid)*.5;
+            let ydi = ((yc-yu - cam[1])/cam[2]*hei + hei)*.5;
+
+            if(chrs[i*4+0] === "+")
+            {
+                ctx.beginPath();
+                ctx.arc(xci,yci, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+                let grd1 = ctx.createRadialGradient(x2i,y2i,0, x2i,y2i,trzR1*2);
+                    grd1.addColorStop(1, world.oklch(.7, .1, .4));
+                    grd1.addColorStop(.6,"#444444");
+                    grd1.addColorStop(0, "#666666");
+                ctx.fillStyle = grd1;
+                ctx.fill();
+            }
+            else if(chrs[i*4+0] === "*")
+            {
+                ctx.beginPath();
+                ctx.arc(xci,yci, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+                let grd1 = ctx.createRadialGradient(x2i,y2i,0, x2i,y2i,trzR1*2);
+                    grd1.addColorStop(1, world.oklch(.7, .1, .6));
+                    grd1.addColorStop(.6,"#444444");
+                    grd1.addColorStop(0, "#666666");
+                ctx.fillStyle = grd1;
+                ctx.fill();
+            }
+            else if(chrs[i*4+0] === "^")
+            {
+                ctx.beginPath();
+                ctx.arc(xci,yci, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+
+                let grd1 = ctx.createRadialGradient(x2i,y2i,0,  x2i,y2i,trzR1*2);
+                    grd1.addColorStop(.6, "#444444");
+                    grd1.addColorStop(0, "#666666");
+                let grd2 = ctx.createRadialGradient(x0i,y0i, 0, x0i,y0i, trzR3);
+                    grd2.addColorStop(0, "#1155AAFF");
+                    grd2.addColorStop(1, "#33333300");
+                let grd3 = ctx.createRadialGradient(x1i,y1i, 0, x1i,y1i, trzR3);
+                    grd3.addColorStop(0, "#AA5511FF");
+                    grd3.addColorStop(1, "#33333300");
+
+                ctx.fillStyle = grd1;
+                ctx.fill();
+                ctx.fillStyle = grd2;
+                ctx.fill();
+                ctx.fillStyle = grd3;
+                ctx.fill();
+            }
+            else
+            {
+                ctx.beginPath();
+                ctx.arc(xci,yci, trzR1, 0,2*Math.PI);
+                ctx.closePath();
+                ctx.fillStyle = "#333333";
+                ctx.fill();
+            }
+
+            let rot = Math.atan2(yu,xu)+Math.PI*.5;
+
+            ctx.fillStyle = "#FFFFFF";
+            ctx.translate(xci,yci);
+            ctx.rotate(rot);
+            ctx.translate(-xci,-yci);
+            ctx.fillText(chrs[i*4+0], xci,yci);//variable name
+            ctx.translate(xci,yci);
+            ctx.rotate(-rot);
+            ctx.translate(-xci,-yci);
+
+            //draw tris outer balls with names
+            world.tmp[0] = x0i;  world.tmp[1] = y0i;
+            world.tmp[2] = x1i;  world.tmp[3] = y1i;
+            world.tmp[4] = x2i;  world.tmp[5] = y2i;
+            for(let j = 0; j < 3; j++)
+            {
+                let x = world.tmp[j*2+0];
+                let y = world.tmp[j*2+1];
+
+                ctx.fillStyle = world.bcol[i*3+j];
+                ctx.beginPath();
+                ctx.arc(x,y, trzR2, 0,2*Math.PI);
+                ctx.closePath();
+                ctx.fill();//ball
+
+                ctx.translate(x,y);
+                ctx.rotate(rot);
+                ctx.translate(-x,-y);
+                ctx.fillStyle = "#FFFFFF";
+                ctx.fillText(world.chrs2[i*3+j], x,y);//name
+                ctx.translate(x,y);
+                ctx.rotate(-rot);
+                ctx.translate(-x,-y);
+            }
+        }
+        requestAnimationFrame(world.triDraw2D);
+    };
+    world.oklch = function(L, C, H)
+    {
+        H *= 2*Math.PI;
+        let a1 = C*Math.cos(H);
+        let a2 = C*Math.sin(H);
+        let l_ = L + 0.3963377774 * a1 + 0.2158037573 * a2;
+        let m_ = L - 0.1055613458 * a1 - 0.0638541728 * a2;
+        let s_ = L - 0.0894841775 * a1 - 1.2914855480 * a2;
+        let l = l_*l_*l_;
+        let m = m_*m_*m_;
+        let s = s_*s_*s_;
+    	let r = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    	let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    	let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+        r = Math.round(r * 255);
+        g = Math.round(g * 255);
+        b = Math.round(b * 255);
+        return "rgb("+r+","+g+","+b+")";
+    };
+    world.countRepeats = function(arr1,arr2)
+    {
+        let count = new Uint32Array(arr1.length);
+        for(let i = 0; i < arr1.length; i++){let a = arr1[i];
+        for(let j = 0; j < arr2.length; j++){let b = arr2[j];  if(a===b){count[i] += 1;}
+        }}
+        return count;
+    }
+    world.maxOnArr = function(arr)
+    {
+        let m = 0;
+        for(let i = 0; i < arr.length; i++)
+        {
+            m = Math.max(m,arr[i]);
+        }
+        return m;
+    }
+    world.removeRepeats = function(arr)
+    {
+        let fin = [];
+        for(let i = 0; i < arr.length; i++){let rep = false;
+        for(let j = 0; j <          i; j++){    rep = arr[i] === arr[j]; if(rep){break;}}
+                                            if(!rep){fin.push(arr[i]);}
+        }
+        return fin;
+    }
+    world.removeElem = function(arr, ele)
+    {
+        let fin = [];
+        for(let i = 0; i < arr.length; i++)
+        {
+            if(arr[i] !== ele){fin.push(arr[i]);}
+        }
+        return fin;
+    }
+    world.getPosArr = function(arr, ele)
+    {
+        for(let i = 0; i < arr.length; i++)
+        {
+            if(arr[i] === ele){return i;}
+        }
+        return -1;
+    }
+    world.itisDigit = function(a)
+    {
+        return a==="0"||
+               a==="1"||
+               a==="2"||
+               a==="3"||
+               a==="4"||
+               a==="5"||
+               a==="6"||
+               a==="7"||
+               a==="8"||
+               a==="9";
+    };
+    
+    //adjust image on element using keys fast (website construction)
+    //window.onkeydown = function(e)
+    //{
+    //    switch(event.code)
+    //    {
+    //      case "ArrowUp"   : world.adjst.he -= .001; break;
+    //      case "ArrowDown" : world.adjst.he += .001; break;
+    //      case "ArrowLeft" : world.adjst.wi -= .001; break;
+    //      case "ArrowRight": world.adjst.wi += .001; break;
+    //      case "KeyW"      : world.adjst.py += .001; break;
+    //      case "KeyS"      : world.adjst.py -= .001; break;
+    //      case "KeyA"      : world.adjst.px += .001; break;
+    //      case "KeyD"      : world.adjst.px -= .001; break;
+    //      case "Enter"     : console.log(world.adjst.wi+","+world.adjst.he+","+world.adjst.px+","+world.adjst.py+","); break;
+    //    }
+    //    let wi = world.adjst.wi * world.elewd | 0;
+    //    let he = world.adjst.he * world.elewd | 0;
+    //    let px = world.adjst.px * world.elewd | 0;
+    //    let py = world.adjst.py * world.elewd | 0;
+    //    world.adjst.el.style.width              = wi+"px";
+    //    world.adjst.el.style.height             = he+"px";
+    //    world.adjst.el.style.backgroundPosition = px+"px "+py+"px";
+    //};
+
+    window.onload = world.ini();
+
+    </script>
+</body>
+
+</html>
