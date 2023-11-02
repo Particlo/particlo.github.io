@@ -8677,7 +8677,7 @@ var renderSteps = function()            //what to do when clicking screen
     var micStp = 1<<12;
     var micBuf = null;
 
-    var audSN8 = null;//createBufferSource() of file or mic 
+    var null;//createBufferSource() of file or mic 
 
     var sondLVL = new Array(64);
 
@@ -8870,7 +8870,6 @@ var renderSteps = function()            //what to do when clicking screen
             micStop();
             audioStop();
 
-            audSN8 = audioBff;
             snd8z  = audioBff.length|0;
             var dR = audioBff.getChannelData(0);
             var dL = null;
@@ -8885,6 +8884,9 @@ var renderSteps = function()            //what to do when clicking screen
                 snd8[w] = dL[i];   ++w;
                 snd8[w] = 0;       ++w;
             }
+            audSN8 = sQx.createBuffer(2, snd8z, smplRt);
+            var cd0 = audSN8.getChannelData(0);  for(var i = 0; i < snd8z; i++){cd0[i] = dR[i];}
+            var cd1 = audSN8.getChannelData(1);  for(var i = 0; i < snd8z; i++){cd1[i] = dL[i];}
             
             snd8m = 0;
             timMv8.value = snd8m;
@@ -9516,9 +9518,7 @@ var renderSteps = function()
                     for(var i = 0; i < min2; ++i){snd8[offst2+i] = stx8d[i];}
 
                     var d0 = audSN8.getChannelData(0);  for(var i = 0; i < min; ++i){d0[offst+i] = stx8d[(i<<2)+0];}
-                    if(audSN8.numberOfChannels >= 2){
                     var d1 = audSN8.getChannelData(1);  for(var i = 0; i < min; ++i){d1[offst+i] = stx8d[(i<<2)+2];}
-                    }
                 }
                 
                 buI = document.createElement("div");
