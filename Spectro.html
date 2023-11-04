@@ -173,9 +173,10 @@ window.onload = start;
     function start()
     {
         document.body.style.touchAction = "none";
-        document.body.style.margin = "0px";
+        document.body.style.margin     = "0px";
         document.body.style.fontFamily = "consolas";
-        document.body.style.background = "rgb(229,229,229)";
+        document.body.style.color      = "rgb(255,255,255)";
+        document.body.style.background = "rgb(33,33,33)";
 
         startWebGL();
         interface1();
@@ -624,7 +625,7 @@ window.onload = start;
             if( o2             ) c+=  a;
             if(!o2 && abs(y)<1.) c = c1;
             if(u.x >= 1. || u.x < 0. ||
-               u.y >= 1. || u.y < 0.) c = vec4(.9);
+               u.y >= 1. || u.y < 0.) c = vec4(.13);
             gl_FragColor = c;
         }`;
         let vxSh3 =
@@ -698,7 +699,7 @@ window.onload = start;
             if(u3A.x<0.) b = b;
             else         b = c;
 
-            c = mix(b,vec4(.9,.9,.9,1.),
+            c = mix(b,vec4(.13,.13,.13,1.),
                     float(  (max(uA.x,uA.y)>=1.||u3A.y>=1.||u3A.y<0.) && 
                             (max(uB.x,uB.y)>=1.||u3B.y>=1.||u3B.y<0.)));
             
@@ -763,8 +764,8 @@ window.onload = start;
  
             c = mix(c, vec4(0.), float(sgn<0.)*max((.3-max(u1f.x,u1f.y))*5.,0.));
             c = mix(vec4(1.), c, min(1.4-max(u1f.x,u1f.y)*.5,1.));
-            c = mix(c,vec4(.9,.9,.9,1.),float(max(u.x,u.y)>=1.));
-            c = mix(c,vec4(.9,.9,.9,1.),float(n1<1.||n1>=6.));
+            c = mix(c,vec4(.13,.13,.13,1.),float(max(u.x,u.y)>=1.));
+            c = mix(c,vec4(.13,.13,.13,1.),float(n1<1.||n1>=6.));
             
             gl_FragColor = c;
         }`;
@@ -850,7 +851,7 @@ window.onload = start;
             u*=2.;
 
             vec4 c = vec4(0.);
-            if(i == 2. || i == 3.) c = mix(c, vec4(0.,0.,0.,1.), sgnz(a)*max((.3-max(u.x,u.y))*5.,0.)); c = mix(vec4(.9,.9,.9,1.), c, min(1.4-max(u.x,u.y)*.5,1.));
+            if(i == 2. || i == 3.) c = mix(c, vec4(0.,0.,0.,1.), sgnz(a)*max((.3-max(u.x,u.y))*5.,0.)); c = mix(vec4(.13,.13,.13,1.), c, min(1.4-max(u.x,u.y)*.5,1.));
             if(i == 0. || i == 1.) c = vec4(.5+.5*cos(x/n*.8+3.+vec3(.0,2.1,4.2)),1.);
 
             gl_FragColor = c;
@@ -902,7 +903,7 @@ window.onload = start;
             c = vec4(.5+.5*cos(x/n*.8+3.+vec3(.0,2.1,4.2)),1.);
             c = mix(c, vec4(0.,0.,0.,1.), s*max((.3-max(u.x,u.y)*2.)*5.,0.));
 
-            //c = mix(vec4(.9,.9,.9,1.), c, min(1.4-max(u.x,u.y)*.5,1.));
+            //c = mix(vec4(.13,.13,.13,1.), c, min(1.4-max(u.x,u.y)*.5,1.));
 
             gl_FragColor = c;
         }`;
@@ -927,7 +928,7 @@ window.onload = start;
         {
             vec2 u = uv;
             float pi = 3.1415926535897932384626433832795;
-            vec4 col = vec4(.9,.9,.9,1.);
+            vec4 col = vec4(.13,.13,.13,1.);
             float m1 = mtx[0].y;
             float m2 = mtx[0].z;
             float m20 = 1.-m2;
@@ -976,7 +977,7 @@ window.onload = start;
             vec2 u = uv;
             
             float pi = 3.1415926535897932384626433832795;
-            vec4 col = vec4(.9,.9,.9,1.);
+            vec4 col = vec4(.13,.13,.13,1.);
             float m1 = mtx[0].y;
             float m2 = mtx[0].z;
             float m3 = mtx[0].w;
@@ -1055,7 +1056,7 @@ window.onload = start;
             vec2 u = uv;
             
             float pi = 3.1415926535897932384626433832795;
-            vec4 col = vec4(.9,.9,.9,1.);
+            vec4 col = vec4(.13,.13,.13,1.);
             float m1 = mtx[0].y;
             float m2 = mtx[0].z;
             
@@ -1122,7 +1123,7 @@ window.onload = start;
             vec2 u = uv;
             
             float pi = 3.1415926535897932384626433832795;
-            vec4 col = vec4(.9,.9,.9,1.);
+            vec4 col = vec4(.13,.13,.13,1.);
 
             float n1 = mtx[0].y;
             float n2 = mtx[0].z;
@@ -1323,7 +1324,7 @@ window.onload = start;
 
             float t = clamp(150.*(1.-v.y)/n, 0., 1.);
 
-            vec4 col = vec4(.9,.9,.9,0.);
+            vec4 col = vec4(.13,.13,.13,0.);
             col = mix(col, .5+.5*cos(c*1.4+2.8+vec4(.0,2.1,4.2,.0)),    float(c >= 0.));
             col = mix(col, vec4(.4,.4,.4,1.),                           float(a >= 0.)              *t);
             col = mix(col, vec4(.8,.8,.8,1.),                           float(a >= 0. && v.x < a )  *t);
@@ -1443,7 +1444,7 @@ window.onload = start;
                 a += cos(pi2 * (u.x*t.x+u.y*t.y) + cosi1)*float(i<n);
             }
 
-            vec4 c = vec4(.9);
+            vec4 c = vec4(.13,.13,.13,1.);
             if(k.x >= 3. && n<1.5) c = vec4(1.,.2,.2,.0);
             
             vec4 c2 = mix(vec4(.4,.4,.9,1.),
@@ -1587,7 +1588,7 @@ window.onload = start;
                				    v.y >= 1. || v.y < 0. );
             cir*=h;
 
-            vec4 c = vec4(.9);
+            vec4 c = vec4(.13,.13,.13,1.);
 
             vec2 tx = floor(texture2D(tex,vec2(.5,.5)*mtx[0].z).xy*s);
             if(t.x == tx.x && t.y == tx.y && uo.y>1. && mtx[0].y<1.5) c = vec4(1.,.2,.2,.0);
@@ -1644,7 +1645,7 @@ window.onload = start;
             vec4 col = +vec4(.0,.9,.0,1.)*xy.x*(1.-xy.y)
                        +vec4(.0,.0,.9,1.)*xy.y*(1.-xy.x)
                        +vec4(.9,.2,.0,1.)*xy.y*xy.x;
-            if(mtx[2].z == 0.) col = vec4(.9);
+            if(mtx[2].z == 0.) col = vec4(.13,.13,.13,1.);
             vec2 v = vec2(atan(uv.x,uv.y)+pi2*.5,length(uv)*2.)/vec2(pi2,1.);
             float t = clamp(300.*(1.-v.y)*mtx[0].z/(n*n+n*.5-.5), 0., 1.);
                   t*= float(mtx[2].z != 2.);
@@ -1701,7 +1702,7 @@ window.onload = start;
                      +vec4(.9,.2,.0,1.)*xy.y*xy.x;
                  d.w = 1.;
 
-            vec4 c = vec4(.9,.9,.9,.0);
+            vec4 c = vec4(.13,.13,.13,.0);
             c = mix(c, d, float(v0.z >= 0.));
 
             vec2 v = vec2(atan(uv.x,uv.y)+pi2*.5,length(uv)*2.)/vec2(pi2,1.);
@@ -4344,7 +4345,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -4385,7 +4386,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -5094,7 +5095,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -5133,7 +5134,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -5372,7 +5373,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -5986,7 +5987,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -6027,7 +6028,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -6080,7 +6081,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7148,7 +7149,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7180,7 +7181,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7211,7 +7212,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7243,7 +7244,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7284,7 +7285,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7333,7 +7334,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -7374,7 +7375,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
         gl.useProgram(shaderP6g);
@@ -8018,7 +8019,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -8069,7 +8070,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -8118,7 +8119,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -8167,7 +8168,7 @@ var renderSteps = function()            //what to do when clicking screen
 
         gl.viewport(0, 0, xrz, yrz);
 
-        gl.clearColor(.9,.9,.9,1);
+        gl.clearColor(.13,.13,.13,1);
         gl.clearDepth(0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -9306,8 +9307,8 @@ var renderSteps = function()            //what to do when clicking screen
                 buI.style.width = "80%";
                 buI.style.height = "80%";
                 buI.style.resize = "none";
-                buI.style.background = "rgb(229,229,229)";
-                buI.style.color = "rgb(0,0,0)";
+                buI.style.background = "rgb(33,33,33)";
+                buI.style.color = "rgb(255,255,255)";
                 buI.style.zIndex = "2";
                 buI.style.visibility = "hidden";
                 buI.style.lineHeight = "100%";
@@ -9545,8 +9546,8 @@ var renderSteps = function()
                 buI.style.width = "80%";
                 buI.style.height = "80%";
                 buI.style.resize = "none";
-                buI.style.background = "rgb(229,229,229)";
-                buI.style.color = "rgb(0,0,0)";
+                buI.style.background = "rgb(33,33,33)";
+                buI.style.color = "rgb(255,255,255)";
                 buI.style.zIndex = "2";
                 buI.style.visibility = "hidden";
                 buI.style.lineHeight = "100%";
@@ -9867,7 +9868,7 @@ var renderSteps = function()
 
         gl.viewport(0, 0, cnvs8aX, cnvs8aY);
 
-        //gl.clearColor(.9,.9,.9,1);
+        //gl.clearColor(.13,.13,.13,1);
         //gl.clearDepth(0);
         //gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -10535,8 +10536,8 @@ var renderSteps = function()
                 buI.style.width = "80%";
                 buI.style.height = "80%";
                 buI.style.resize = "none";
-                buI.style.background = "rgb(229,229,229)";
-                buI.style.color = "rgb(0,0,0)";
+                buI.style.background = "rgb(33,33,33)";
+                buI.style.color = "rgb(255,255,255)";
                 buI.style.zIndex = "2";
                 buI.style.visibility = "hidden";
                 buI.style.lineHeight = "100%";
@@ -11924,7 +11925,7 @@ var renderSteps = function()
 
         gl.viewport(0, 0, cnvs9aX, cnvs9aY);
 
-        //gl.clearColor(.9,.9,.9,1);
+        //gl.clearColor(.13,.13,.13,1);
         //gl.clearDepth(0);
         //gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -11961,7 +11962,7 @@ var renderSteps = function()
             gl.viewport(0, 0, xrz, yrz);
         }
 
-        //gl.clearColor(.9,.9,.9,1);
+        //gl.clearColor(.13,.13,.13,1);
         //gl.clearDepth(0);
         //gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
