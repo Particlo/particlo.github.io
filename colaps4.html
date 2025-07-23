@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>colaps4</title>
+<meta charset="UTF-8">
+<script>
+    //file:///C:/Users/user/Desktop/colaps4.html
+    window.onload = startGame;
+
+    var lvlEl = null;
+    function iniFreqLvL()
+    {
+        lvlEl = document.createElement("textarea");
+        lvlEl.style.position = "absolute";
+        lvlEl.style.margin = "0px";
+        lvlEl.style.width = "300px";
+        lvlEl.style.height = "950px";
+        lvlEl.style.fontSize = "20px";
+        lvlEl.style.fontFamily = "consolas";
+        lvlEl.style.lineHeight = "70%";
+        lvlEl.style.background = "rgb(200,200,200)";
+      //lvlEl.style.color = "white";
+        lvlEl.value = "0";
+        document.body.appendChild(lvlEl);
+    }
+    var sss = ["\u25A1","\u25A0"];
+    var frqP1 = 0;  //parent frequency
+    var frqP2 = 0;  //parent frequency
+    var nn  = 4;    //1 2 4 8 16 32 64 128 256
+    var t11 = 1 << nn;
+    var t22 = 1 << t11;    var t2M = t22-1;
+    var d1  = new Uint32Array(t22);
+    var d2  = new Uint8Array(t22);
+    var d3  = new Uint32Array(t22);
+
+    var imf =           1>>>0;          //nor network result
+    var imx =      (1<<7)>>>0;          //must be power of 2
+    var imd =     (imx-1)>>>0;
+    var imZ = (imx*imx*4)>>>0;
+    var im  = new Uint8Array(imZ*2);    //one half for 1D simulation other half for 2D simulation
+    var imF = -1;                       //frame counter, 0 >= auto render, -1 = no auto render
+    var imN = 0>>>0;
+    function fillIm0()//random fill buffer
+    {
+        for(var i = 0; i < imZ*2; ++i){im[i] = Math.random()*256;}
+    }
+    function fillIm1()
+    {
+        //find higest fundamentalFreq in imf
+        var low = 4>>>0;//2^4=16bits of the 32bit max
+        for(var i = 1>>>0; i < (32>>>0); i=(i+1)>>>0)
+        {
+            var a = (imf>>>(i-0))&1;
+            var b = (imf>>>(i-1))&1;
+            if(a==b){continue;}
+            var j = 0>>>0;
+            while(j < (32>>>0) && ((i>>>j)&1)==0)//find lowest bit on
+            {
+                j = (j+1)>>>0;
+            }
+            if(j<low){low = j>>>0;}
+        }
+        imN = (5-low)>>>0;
+        low = (1<<low)>>>0;
+        var imf2 = imf>>>0;
+            imf  =   0>>>0;
+        var i2   =   0>>>0;
+        for(var i = 0>>>0; i < (32>>>0); i=(i+low)>>>0)//fill imf with bits
+        {
+            imf = imf | (((imf2>>>i)&1)<<i2);
+            i2=(i2+1)>>>0;
+        }
+    }
+    function fillIm2()
+    {
+        if(imF<0){return;}
+
+        //1D simulation
+        {
+            var shf =  (1-(imN&1))>>>0; //when number of inputs is even shift reading position to avoid the simulation shifting to the side
+            var i   = (imF  &imd)>>>0;
+            var i2  = ((i-1)&imd)>>>0;
+            var i3  =    (i2*imx)>>>0;
+            var sh  = (shf-((i&1)&shf))>>>0;
+            for(var j = 0>>>0; j < imx; j=(j+1)>>>0){
+                var a = (im[((i3 + ((j+0-sh)&imd))<<2)>>>0]*((imN>=1)>>>0)&1)>>>0;
+                var b = (im[((i3 + ((j+1-sh)&imd))<<2)>>>0]*((imN>=2)>>>0)&1)>>>0;
+                var c = (im[((i3 + ((j-1-sh)&imd))<<2)>>>0]*((imN>=3)>>>0)&1)>>>0;
+                var d = (im[((i3 + ((j+2-sh)&imd))<<2)>>>0]*((imN>=4)>>>0)&1)>>>0;
+                var e = (im[((i3 + ((j-2-sh)&imd))<<2)>>>0]*((imN>=5)>>>0)&1)>>>0;
+                var s = (+(a<<0)
+                         +(b<<1)
+                         +(c<<2)
+                         +(d<<3)
+                         +(e<<4))>>>0;
+                im[((i*imx + j)<<2)>>>0] = ((imf>>>s)&1)>>>0;
+            }
+            //convert to GPU 2Dtexture format
+            for(var j = 0>>>0; j < imx; j=(j+1)>>>0){
+                var a = (im[((i*imx + j)<<2)>>>0]*255)>>>0;
+                im[(((i*imx + j)<<2)+0)>>>0] = a;
+                im[(((i*imx + j)<<2)+1)>>>0] = a;
+                im[(((i*imx + j)<<2)+2)>>>0] = a;
+                im[(((i*imx + j)<<2)+3)>>>0] = 255;
+            }
+        }
+        //2D simulation
+        {
+            for(var i = 0>>>0; i < imx; i=(i+1)>>>0){
+            for(var j = 0>>>0; j < imx; j=(j+1)>>>0){
+                var a = (im[(imZ+((((i+0)&imd)*imx + ((j+0)&imd))<<2))>>>0]&1)>>>0;
+                var b = (im[(imZ+((((i+1)&imd)*imx + ((j+0)&imd))<<2))>>>0]&1)>>>0;
+                var c = (im[(imZ+((((i-1)&imd)*imx + ((j+0)&imd))<<2))>>>0]&1)>>>0;
+                var d = (im[(imZ+((((i+0)&imd)*imx + ((j+1)&imd))<<2))>>>0]&1)>>>0;
+                var e = (im[(imZ+((((i+0)&imd)*imx + ((j-1)&imd))<<2))>>>0]&1)>>>0;
+                var s = (+(a<<0)
+                         +(b<<1)
+                         +(c<<2)
+                         +(d<<3)
+                         +(e<<4))>>>0;
+                im[(imZ+(((i*imx + j)<<2)+1))>>>0] = ((imf>>>s)&1)>>>0;
+            }}
+            //convert to GPU 2Dtexture format
+            for(var i = 0>>>0; i < imx; i=(i+1)>>>0){
+            for(var j = 0>>>0; j < imx; j=(j+1)>>>0){
+                var a = (im[(imZ+(((i*imx + j)<<2)+1))>>>0]*255)>>>0;
+                im[(imZ+(((i*imx + j)<<2)+0))>>>0] = a;
+                im[(imZ+(((i*imx + j)<<2)+1))>>>0] = a;
+                im[(imZ+(((i*imx + j)<<2)+2))>>>0] = a;
+                im[(imZ+(((i*imx + j)<<2)+3))>>>0] = 255;
+            }}
+        }
+        ++imF;
+        rendDo();
+    }
+
+    function findFreqLvL(ball)//show freq discovered in each level
+    {
+        for(var k = 0; k < t22; ++k)
+        {
+            d2[k] = 0;
+        }
+
+        var d3w = 0;
+        var freq = (orbD3[ball*4+0]<< 0) |
+                   (orbD3[ball*4+1]<< 8) |
+                   (orbD3[ball*4+2]<<16) |
+                   (orbD3[ball*4+3]<<24) ;
+        var freq2 = 0;
+        for(var k = 0; k < t11; ++k)
+        {
+            freq2 = freq2 | (((freq>>>(k<<1))&1)<<k);
+        }
+        freq = freq2;
+        
+        var w = 0;
+        for(var i = nn-1; i >= 0; --i)
+        {
+            var o = 0;
+            for(var j = 0; j < t11; ++j)
+            {
+                o |= (1<<j)*((j>>>i)&1);
+            }
+          //var o2 = (~o) & t2M;
+            d1[w] = o ;  ++w;        d2[o ] = 1;
+          //d1[w] = o2;  ++w;        d2[o2] = 1;
+        }
+
+        var lvl = 0;
+        var end = false;
+        for(var i = 0; i < w; ++i)
+        {
+            if(d1[i] == freq)
+            {
+                end = true;
+                break;
+            }
+        }
+
+        var lwst = 4294967295;
+        var i2 = 0;
+        var j2 = 0;
+
+        var wT = 0;
+        for(var i = 0; i < w; ++i)
+        {
+            if(i == wT && end){break;}
+            if(i == wT){wT = w; ++lvl;}
+
+            for(var j = 0; j <= i; ++j)
+            {
+                var a1 = (~(d1[i] | d1[j])) & t2M;
+              //var a1 = (~(d1[i] & d1[j])) & t2M;
+                if(freq==a1)
+                {
+                    if(j<lwst)
+                    {
+                        lwst = j;
+                        i2 = i;
+                        j2 = j;
+                    }
+                    d3[d3w] = i;  ++d3w;
+                    d3[d3w] = j;  ++d3w;
+                    //for(var k = 0; k < t11; ++k){txt += sss[(d1[i]>>>k) & 1];} txt += " "+i+ "\n";
+                    //for(var k = 0; k < t11; ++k){txt += sss[(d1[j]>>>k) & 1];} txt += " "+j+ "\n\n";
+                    end = true;
+                }
+                if(d2[a1] == 0)
+                {
+                    d2[a1] = 1;
+                    d1[w ] = a1;    ++w;
+                }
+            }
+        }
+
+        
+        var txt0 = "";
+        for(var k = 0; k < t11; ++k){txt0 += sss[(freq>>>k) & 1];}
+
+        d3w = d3w>>>1;
+        var txt = "";
+        for(var l = 0; l < d3w; ++l)
+        {
+            var i = d3[(l<<1)+0];
+            var j = d3[(l<<1)+1];
+            var d1i = d1[i];
+            var d1j = d1[j];
+            for(var k = 0; k < t11; ++k){txt += sss[(d1i>>>k) & 1];} txt += " "+i+ "\n";
+            for(var k = 0; k < t11; ++k){txt += sss[(d1j>>>k) & 1];} txt += " "+j+ "\n\n";
+        }
+        //save parents freq
+        var eon = 0;
+        eon = 0; for(var k = 0; k < 16; ++k){var a = (d1[i2]>>>k)&1; eon = eon | (a<<(k*2+0))
+                                                                              | (a<<(k*2+1));}  frqP1 = eon;
+        eon = 0; for(var k = 0; k < 16; ++k){var a = (d1[j2]>>>k)&1; eon = eon | (a<<(k*2+0))
+                                                                              | (a<<(k*2+1));}  frqP2 = eon;
+        //lowest discovered freq
+        var txt1 = "";
+        for(var k = 0; k < t11; ++k){txt1 += sss[(d1[i2]>>>k) & 1];} txt1 += " "+i2+ "\n";
+        for(var k = 0; k < t11; ++k){txt1 += sss[(d1[j2]>>>k) & 1];} txt1 += " "+j2+ "\n----\n";
+
+        lvlEl.value = txt0 +"  "+ lvl +"\n----\n"+ txt1 + txt;
+    }
+    
+    function startGame()
+    {
+        document.body.style.touchAction = "none";
+        document.body.style.margin = "0px";
+
+        worldV();
+        startHtml();
+        startInput();
+        startWebGL();
+        iniFreqLvL();
+ 
+        window.resizeWindow = function()
+        {
+            window.resizeHTML();
+            window.resizeGL();
+        }
+        window.onresize = window.resizeWindow;
+        window.resizeWindow();
+        window.requestAnimationFrame(render);
+    }
+    function startHtml()
+    {
+        document.body.style.touchAction = "none";
+        document.body.style.margin = "0px";
+
+        window.glCanvas = document.createElement("canvas");
+        window.glCanvas.style.position = "absolute";
+        document.body.appendChild(window.glCanvas);
+        
+        window.resizeHTML = function()
+        {
+            window.glCanvas.width = window.innerWidth;
+            window.glCanvas.height = window.innerHeight;
+            window.glCanvas.style.top = "0px";
+            window.glCanvas.style.left = "0px";
+            window.glCanvas.style.width = window.innerWidth+"px";
+            window.glCanvas.style.height = window.innerHeight+"px";
+        }
+    }
+    function startWebGL()
+    {
+        window.gl = window.glCanvas.getContext("webgl",{alpha: false,
+                                                        antialias: false,
+                                                        depth: false,
+                                                        stencil: false,
+                                                        premultipliedAlpha: false,
+                                                        //preserveDrawingBuffer: false,
+                                                        //failIfMajorPerformanceCaveat: false
+                                                    });
+        gl.depthFunc(gl.ALWAYS);
+        gl.disable(gl.BLEND);
+        gl.disable(gl.CULL_FACE);
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.DITHER);
+        gl.disable(gl.POLYGON_OFFSET_FILL);
+        gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+        gl.disable(gl.SAMPLE_COVERAGE);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.disable(gl.STENCIL_TEST);
+        var ext = gl.getExtension('OES_texture_float');
+
+        //shaders
+        var vxSh0 =
+        `precision highp float;
+        attribute float vtx;
+        uniform sampler2D tex0;
+        uniform mat4 mtx;
+        varying vec2 u;
+        varying float aV;
+        varying float aT;
+        void main()
+        {
+            float l = floor(      vtx/3.    );
+        	float f = floor(fract(vtx/3.)*3.);
+        	vec2 s = vec2(0.,-1.);
+        	if(f == 0.){s.y = 2.;}
+        	if(f == 1.){s.x = 1.732;}
+        	if(f == 2.){s.x = -1.732;}
+            u = s;
+            aV = (l+.5)/mtx[3].x;
+            vec4 t = texture2D(tex0,vec2(aV,.5));  aT = t.z;
+            vec2 p = t.xy;
+            p = ((s+p)-mtx[1].xy)*mtx[1].z*vec2(mtx[1].w,1.);
+            gl_Position = vec4(p,0.,1.)*.5;
+        }`;
+        var frSh0 =
+        `precision highp float;
+        uniform sampler2D tex1;
+        varying vec2 u;
+        varying float aV;
+        varying float aT;
+        void main()
+        {
+            float l = dot(u,u);
+            if(l > 1.){discard;}
+
+            vec4 t = texture2D(tex1,vec2(aV,.5)).xyzw;
+                 t = floor(t*255.999);
+    
+            float pi = 3.14159265359;
+            float r = (atan(u.y,u.x)*(.5/pi)+.5)*8.*4.;
+
+            float a = pow(2.,floor(mod(r,8.)));
+            vec4 b = step(vec4(.5),fract(t/a * .5));
+            
+            float c = floor(r/8.);
+            
+            float d = 0.;
+            if(c == 0.) d = b.x;
+            if(c == 1.) d = b.y;
+            if(c == 2.) d = b.z;
+            if(c == 3.) d = b.w;
+            
+            if(l<.5) d = mix(.35,.65,aT);
+            //if(abs(fract(r)-.5)>.45) d = .5;
+
+            gl_FragColor = vec4(d);
+        }`;
+        var vxSh1 =
+        `precision highp float;
+        attribute float vtx;
+        uniform sampler2D tex0;
+        uniform sampler2D tex1;
+        uniform mat4 mtx;
+        varying vec2 u;
+        varying float aV;
+        void main()
+        {
+        	float l =             vtx/6.     ;
+        	float f = floor(fract(vtx/6.)*6.);
+        	vec2 s = vec2(0.);
+            if(f == 0.){s = vec2(-1., 1.);}
+        	if(f == 1.){s = vec2( 1., 1.);}
+            if(f == 2.){s = vec2( 1.,-1.);}
+        	if(f == 3.){s = vec2( 1.,-1.);}
+            if(f == 4.){s = vec2(-1.,-1.);}
+        	if(f == 5.){s = vec2(-1., 1.);}
+            u = s;
+
+            float dv = 1./mtx[3].x;
+
+            vec2 i = vec2(l*.5*dv , .5);
+
+            vec4 a = texture2D(tex1,i);
+            float a0 = dot(floor(a.xy*255.+.5) , vec2(1.,256.))*dv + dv*.5;
+            float a1 = dot(floor(a.zw*255.+.5) , vec2(1.,256.))*dv + dv*.5;
+            aV = float(fract(l*.5) >= .5) - float(abs(a0-a1)>.0001)*2.;
+            if(fract(l*.5) >= .5){a0 = a1;}
+
+            vec2 p1 = texture2D(tex0,i          ).xy;
+            vec2 p2 = texture2D(tex0,vec2(a0,.5)).xy;
+
+            mat2 r;
+            r[0] = (p1-p2)*.5;
+            r[1] = normalize(r[0].yx)*vec2(-1.,1.);
+            vec2 p = ((r*s+(p1+p2)*.5)-mtx[1].xy)*mtx[1].z*vec2(mtx[1].w,1.);
+            gl_Position = vec4(p,0.,1.)*.5*float(a0<1.);
+        }`;
+        var frSh1 =
+        `precision highp float;
+        varying vec2 u;
+        varying float aV;
+        void main()
+        {
+            float l = dot(u,u);
+            if(aV>=0. && l > .9)                  {discard;}
+            if(aV>=0. && length(u*vec2(1.,2.))<1.){discard;}
+            if(aV==0. && u.y>=.0)                 {discard;}
+            if(aV> 0. && u.y< .0)                 {discard;}
+            if(aV< 0. && abs(u.y)>.2)             {discard;}
+            gl_FragColor = mix( vec4(.5,.5,.5,1.),
+                                vec4(.4,.9,.4,1.),
+                                u.x*.5+.5);
+        }`;
+        var vxSh2 =
+        `precision highp float;
+        attribute float vtx;
+        uniform mat4 mtx;
+        varying vec2 u;
+        void main()
+        {
+        	vec2 s = vec2(0);
+        	if(vtx == 0.5){s = vec2(0,0);}
+        	if(vtx == 1.5){s = vec2(0,2);}
+        	if(vtx == 2.5){s = vec2(2,0);}
+            u = s;
+            vec2 z = 512./mtx[3].zw*vec2(1,2);
+            gl_Position = vec4(s*z+(1.-z),0,1)*.5;
+        }`;
+        var frSh2 =
+        `precision highp float;
+        uniform sampler2D tex0;
+        varying vec2 u;
+        void main()
+        {
+            if(u.x>1.||u.y>1.){discard;}
+            gl_FragColor = texture2D(tex0,u).xyzw;
+        }`;
+        
+        window.shaderCreator = function(vectexShaderCode, fragmentShaderCode)
+        {
+            var shader0 = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(shader0, vectexShaderCode);
+            gl.compileShader(shader0);
+            gl.getShaderParameter(shader0, gl.COMPILE_STATUS) || alert(gl.getShaderInfoLog(shader0));
+            
+            var shader1 = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(shader1, fragmentShaderCode);
+            gl.compileShader(shader1);
+            gl.getShaderParameter(shader1, gl.COMPILE_STATUS) || alert(gl.getShaderInfoLog(shader1));
+
+            var shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, shader0);
+            gl.attachShader(shaderProgram, shader1);
+            gl.linkProgram(shaderProgram);
+
+            gl.detachShader(shaderProgram, shader0);
+            gl.detachShader(shaderProgram, shader1);
+            gl.deleteShader(shader0);
+            gl.deleteShader(shader1);
+
+            return shaderProgram;
+        };
+
+        //physics shaders
+        window.shaderP0 = shaderCreator(vxSh0, frSh0);//render orbs
+        window.shdVtx0 = gl.getAttribLocation(shaderP0, "vtx");
+        window.shdMtx0 = gl.getUniformLocation(shaderP0, "mtx");
+        window.shdTex00 = gl.getUniformLocation(shaderP0, "tex0");
+        window.shdTex01 = gl.getUniformLocation(shaderP0, "tex1");
+        window.shaderP1 = shaderCreator(vxSh1, frSh1);//render jonts
+        window.shdVtx1 = gl.getAttribLocation(shaderP1, "vtx");
+        window.shdMtx1 = gl.getUniformLocation(shaderP1, "mtx");
+        window.shdTex10 = gl.getUniformLocation(shaderP1, "tex0");
+        window.shdTex11 = gl.getUniformLocation(shaderP1, "tex1");
+        window.shaderP2 = shaderCreator(vxSh2, frSh2);//render map
+        window.shdVtx2 = gl.getAttribLocation(shaderP2, "vtx");
+        window.shdMtx2 = gl.getUniformLocation(shaderP2, "mtx");
+        window.shdTex2 = gl.getUniformLocation(shaderP2, "tex0");
+
+        //meshes all in one buff
+        var meshData = new Float32Array(orbNMAX*3*2*2);   //triangles with single float vertex
+        for(var i = 0; i < orbNMAX*3*2*2; ++i)
+        {
+            meshData[i] = i+.5;
+        }
+        window.meshBuff = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, window.meshBuff);
+        gl.bufferData(gl.ARRAY_BUFFER, meshData, gl.STATIC_DRAW);
+
+        //textures
+        window.texCreator = function(format, x, y, type, txf, data, txId)
+        {
+            gl.activeTexture(txId);   
+            var tx = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, tx);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, txf);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, txf);
+            gl.texImage2D(gl.TEXTURE_2D, 0, format, x, y, 0, format, type, data);
+            return tx;
+        }
+        window.tex0 = window.texCreator(gl.RGBA,     imx, imx*2, gl.UNSIGNED_BYTE, gl.NEAREST, null, gl.TEXTURE0);
+        window.tex1 = window.texCreator(gl.RGBA, orbNMAX,     1, gl.FLOAT,         gl.NEAREST, null, gl.TEXTURE1);
+        window.tex2 = window.texCreator(gl.RGBA, orbNMAX,     1, gl.UNSIGNED_BYTE, gl.NEAREST, null, gl.TEXTURE2);
+        window.tex3 = window.texCreator(gl.RGBA, orbNMAX,     1, gl.UNSIGNED_BYTE, gl.NEAREST, null, gl.TEXTURE3);
+
+        //global matrix used by shaders
+        window.shaderMtx = new Float32Array(4*4);
+
+        //resize window
+        window.resizeGL = function()
+        {
+            gl.viewport(0, 0, window.innerWidth, window.innerHeight);
+
+            window.rdPix = new Float32Array(window.innerWidth*window.innerHeight*4);
+            shaderMtx[0] = window.innerWidth;
+            shaderMtx[1] = window.innerHeight;
+            cam[3] = window.innerWidth/window.innerHeight;
+        }
+    }
+    function startInput()
+    {
+        window.inputO = 0;  //1=tap 2=fastTapOut 3=tapOut
+        window.inputI = 0;  //1=frame of click 0=frame not of click
+        window.inputU = 0;  //bit0=click1 bit1=click2 bit2=click3
+        window.inputU2= 0;  //bit state when action happened
+        window.inputT = 0;
+
+        window.inputX = 0;
+        window.inputY = 0;
+        window.inputZ = 0;
+
+        window.inputXd = 0;
+        window.inputYd = 0;
+
+        window.inputDo = function(x,y,z, type)
+        {
+            if(type == 0)
+            {
+                if(performance.now()-inputT < 200)
+                {
+                    inputO = 2;
+                }
+                else{inputO = 3;}
+            }
+            if(type == 1)
+            {
+                inputT = performance.now();
+                inputO = 1;
+                inputXd = 0;
+                inputYd = 0;
+            }
+            if(type == 2)
+            {
+                inputXd += x-inputX;
+                inputYd += y-inputY;
+            }
+            if(type == 3)
+            {
+                inputZ += z;
+            }
+            inputX = x;
+            inputY = y;
+
+            rendDo();
+        }
+        window.mouseDown = function(e)
+        {
+            e.preventDefault();
+
+            inputU2 = inputU2 | (1<<e.button);
+            inputU  = inputU2;
+            inputI  = 1;
+
+            inputDo(    e.clientX, 
+                        e.clientY,0,
+                        1);
+        };
+        window.mouseUp = function(e)
+        {
+            e.preventDefault();
+
+            inputU  = inputU2;
+            inputU2 = inputU2 & (~(1<<e.button));
+
+            inputDo(    e.clientX,
+                        e.clientY,0,
+                        0);
+        };
+        window.mouseMove = function(e)
+        {
+            e.preventDefault();
+            inputDo(    e.clientX,
+                        e.clientY,0,
+                        2);
+        };
+        window.mousewheel = function(e)
+        {
+            e.preventDefault();
+            inputDo(    e.clientX,
+                        e.clientY,
+                        e.deltaY,
+                        3);
+        };
+        window.glCanvas.addEventListener("mousedown",   mouseDown,   true);
+        window.glCanvas.addEventListener("mouseup",     mouseUp,     true);
+        window.glCanvas.addEventListener("mouseout",    mouseUp,     true);
+        window.glCanvas.addEventListener("mouseleave",  mouseUp,     true);
+        window.glCanvas.addEventListener("mousemove",   mouseMove,   true);
+        window.glCanvas.addEventListener("wheel",       mousewheel,  true);
+        window.glCanvas.addEventListener("contextmenu", event => event.preventDefault());
+
+        window.keyDown = function(e)
+        {
+            //e.preventDefault();
+            var dn = 0;
+            if(e.code === "Digit1"){dn = 1;}
+            if(e.code === "Digit2"){dn = 2;}
+            if(e.code === "Digit3"){dn = 3;}
+            if(e.code === "Digit4"){dn = 4;}
+            if(dn != 0)//defrequencify last grabed ball
+            {
+                var shftk = e.shiftKey*1;
+                
+                var o = 0;
+                for(var j = 0; j < 32; ++j)
+                {
+                    o = o | (1<<j)*((j>>(5-dn))&1);
+                }
+
+                var z = 16/cam[2];
+
+                var n = orbN;
+                var a = orbN*4;
+                addOrb(inputX-40*z, inputY     , shftk);
+                addOrb(inputX+40*z, inputY     , shftk);
+                addOrb(inputX-40*z, inputY+70*z, shftk);
+                addOrb(inputX+40*z, inputY+70*z, shftk);
+                orbD3[a] = (o>>> 0)&255;    ++a;
+                orbD3[a] = (o>>> 8)&255;    ++a;
+                orbD3[a] = (o>>>16)&255;    ++a;
+                orbD3[a] = (o>>>24)&255;    ++a; o=~o;
+                orbD3[a] = (o>>> 0)&255;    ++a;
+                orbD3[a] = (o>>> 8)&255;    ++a;
+                orbD3[a] = (o>>>16)&255;    ++a;
+                orbD3[a] = (o>>>24)&255;    ++a;
+                orbD3[a] = orbD3[grab*4+0]; ++a;
+                orbD3[a] = orbD3[grab*4+1]; ++a;
+                orbD3[a] = orbD3[grab*4+2]; ++a;
+                orbD3[a] = orbD3[grab*4+3]; ++a;
+                orbD3[a] =~orbD3[grab*4+0]; ++a;
+                orbD3[a] =~orbD3[grab*4+1]; ++a;
+                orbD3[a] =~orbD3[grab*4+2]; ++a;
+                orbD3[a] =~orbD3[grab*4+3]; ++a;
+
+                a = orbN*4;
+                addOrb(inputX-120*z, inputY+140*z, shftk);
+                addOrb(inputX- 40*z, inputY+140*z, shftk);
+                addOrb(inputX+ 40*z, inputY+140*z, shftk);
+                addOrb(inputX+120*z, inputY+140*z, shftk);
+
+                orbD2[a] = ((n+0)>>>0)&255;  ++a;
+                orbD2[a] = ((n+0)>>>8)&255;  ++a;
+                orbD2[a] = ((n+2)>>>0)&255;  ++a;
+                orbD2[a] = ((n+2)>>>8)&255;  ++a;
+
+                orbD2[a] = ((n+1)>>>0)&255;  ++a;
+                orbD2[a] = ((n+1)>>>8)&255;  ++a;
+                orbD2[a] = ((n+2)>>>0)&255;  ++a;
+                orbD2[a] = ((n+2)>>>8)&255;  ++a;
+
+                orbD2[a] = ((n+0)>>>0)&255;  ++a;
+                orbD2[a] = ((n+0)>>>8)&255;  ++a;
+                orbD2[a] = ((n+3)>>>0)&255;  ++a;
+                orbD2[a] = ((n+3)>>>8)&255;  ++a;
+
+                orbD2[a] = ((n+1)>>>0)&255;  ++a;
+                orbD2[a] = ((n+1)>>>8)&255;  ++a;
+                orbD2[a] = ((n+3)>>>0)&255;  ++a;
+                orbD2[a] = ((n+3)>>>8)&255;  ++a;
+
+                addOrb(inputX+0*z, inputY+210*z, shftk);
+
+                orbD2[a] = ((n+5)>>>0)&255;  ++a;
+                orbD2[a] = ((n+5)>>>8)&255;  ++a;
+                orbD2[a] = ((n+6)>>>0)&255;  ++a;
+                orbD2[a] = ((n+6)>>>8)&255;  ++a;
+
+                rendDo();
+            }
+            if(e.code === "Space")
+            {
+                var a = orbN*4;
+                addOrb(inputX-50, inputY, 0);
+                orbD3[a] = (frqP1>>> 0)&255;    ++a;
+                orbD3[a] = (frqP1>>> 8)&255;    ++a;
+                orbD3[a] = (frqP1>>>16)&255;    ++a;
+                orbD3[a] = (frqP1>>>24)&255;    ++a;
+                addOrb(inputX+50, inputY, 0);
+                orbD3[a] = (frqP2>>> 0)&255;    ++a;
+                orbD3[a] = (frqP2>>> 8)&255;    ++a;
+                orbD3[a] = (frqP2>>>16)&255;    ++a;
+                orbD3[a] = (frqP2>>>24)&255;    ++a;
+                rendDo();
+            }
+            if(e.code === "KeyR")
+            {
+                var o = 0;
+                for(var j = 0; j < 32; ++j)
+                {
+                    o = o | (1<<j)*(j&1);
+                }
+                //var g = 0;
+                //for(var j = 0; j < 32; ++j)
+                //{
+                //    g = g | (1<<j)*((j>>>1)&1);
+                //}   o=o&g;
+
+                var a = orbN*4;
+                addOrb(inputX, inputY, 0);
+                orbD3[a] = ((Math.random()*255)&o); orbD3[a] = (orbD3[a]>>>1)|(((orbD3[a]>>>2)|(orbD3[a]>>>3))*0)|orbD3[a];    ++a;
+                orbD3[a] = ((Math.random()*255)&o); orbD3[a] = (orbD3[a]>>>1)|(((orbD3[a]>>>2)|(orbD3[a]>>>3))*0)|orbD3[a];    ++a;
+                orbD3[a] = ((Math.random()*255)&o); orbD3[a] = (orbD3[a]>>>1)|(((orbD3[a]>>>2)|(orbD3[a]>>>3))*0)|orbD3[a];    ++a;
+                orbD3[a] = ((Math.random()*255)&o); orbD3[a] = (orbD3[a]>>>1)|(((orbD3[a]>>>2)|(orbD3[a]>>>3))*0)|orbD3[a];    ++a;
+                rendDo();
+            }
+            if(e.code === "KeyC")   //copy-paste network
+            {
+                var w = 0;
+                var s = 5;          //start location of network
+                var t = 31;         //how many balls to copy
+                for(var i = 0; i < t; ++i)
+                {
+                    orbD1[(s+t+i)*4 + 0] = orbD1[(s+i)*4 + 0]+30;
+                    orbD1[(s+t+i)*4 + 1] = orbD1[(s+i)*4 + 1];
+                    orbD1[(s+t+i)*4 + 2] = orbD1[(s+i)*4 + 2];
+
+                    var c1 = (orbD2[(s+i)*4 + 0]<<0)|
+                             (orbD2[(s+i)*4 + 1]<<8);    if(c1!=(1<<16)-1){c1+=t;}
+                    var c2 = (orbD2[(s+i)*4 + 2]<<0)|
+                             (orbD2[(s+i)*4 + 3]<<8);    if(c2!=(1<<16)-1){c2+=t;}
+
+                    orbD2[(s+t+i)*4 + 0] = (c1>>>0)&255;
+                    orbD2[(s+t+i)*4 + 1] = (c1>>>8)&255;
+                    orbD2[(s+t+i)*4 + 2] = (c2>>>0)&255;
+                    orbD2[(s+t+i)*4 + 3] = (c2>>>8)&255;
+
+                    orbD3[(s+t+i)*4 + 0] = orbD3[(s+i)*4 + 0];
+                    orbD3[(s+t+i)*4 + 1] = orbD3[(s+i)*4 + 1];
+                    orbD3[(s+t+i)*4 + 2] = orbD3[(s+i)*4 + 2];
+                    orbD3[(s+t+i)*4 + 3] = orbD3[(s+i)*4 + 3];
+                }
+                orbN+=t;
+                rendDo();
+            }
+            if(e.code === "KeyZ"){fillIm0();rendDo();}  //simulation reset 
+            if(e.code === "KeyX"){                      //simulation on-off
+                if(imF<0){imF = 0;rendDo();}
+                else     {imF =-1;}
+            }
+        }
+        document.addEventListener("keydown",   keyDown,   true);
+    }
+    function worldV()
+    {
+        window.orbN = 0;
+        window.orbNMAX = 1024;
+        window.cam = new Float32Array([0,0,16,1]);//XY position, Z zoom, W/H screen ratio
+        window.orbD1 = new Float32Array(orbNMAX*4);//2D positions list only 2 out of 4 are used
+        window.orbD2 = new Uint8Array(orbNMAX*4);//joint to what list
+        window.orbD3 = new Uint8Array(orbNMAX*4);//all states possible for each orb
+        window.grab = -9;   //==-9 grabbed nothing
+                            //==-2 grabbed Jont
+                            //==-1 grabbed background
+                            //>= 0 grabbed orb
+        window.paint = 0;   //paint freq color
+
+        window.addOrb = function(x,y,t)
+        {
+            if(orbN == orbNMAX){return;}
+
+            x = 2*x/window.innerWidth -1;   x *= cam[2]*cam[3];     x += cam[0];
+            y =-2*y/window.innerHeight+1;   y *= cam[2];            y += cam[1];
+
+            var w = orbN;    ++orbN;
+            orbD1[w*4+0] = x;
+            orbD1[w*4+1] = y;
+            orbD1[w*4+2] = t;
+
+            orbD2[w*4 + 0] = 255;
+            orbD2[w*4 + 1] = 255;
+            orbD2[w*4 + 2] = 255;
+            orbD2[w*4 + 3] = 255;
+
+            orbD3[w*4 + 0] = 0;
+            orbD3[w*4 + 1] = 0;
+            orbD3[w*4 + 2] = 0;
+            orbD3[w*4 + 3] = 0;
+        }
+        window.delOrb = function(w)
+        {
+            //w = which orb to delete
+            if(w >= orbN){return;}
+            
+            --orbN;
+            //delete from orbs position
+            orbD1[w*4+0] = orbD1[orbN*4+0];
+            orbD1[w*4+1] = orbD1[orbN*4+1];
+            orbD1[w*4+2] = orbD1[orbN*4+2];
+
+            //delete from orbs jonts
+            orbD2[w*4+0] = orbD2[orbN*4+0];
+            orbD2[w*4+1] = orbD2[orbN*4+1];
+            orbD2[w*4+2] = orbD2[orbN*4+2];
+            orbD2[w*4+3] = orbD2[orbN*4+3];
+
+            //adjust jonts pointers
+            for(var i = 0; i < orbN; ++i)
+            {
+                var a0 = orbD2[i*4+0] | (orbD2[i*4+1]<<8);
+                var a1 = orbD2[i*4+2] | (orbD2[i*4+3]<<8);
+                if(a0==w){a0=(1<<16)-1;}
+                if(a1==w){a1=(1<<16)-1;}
+                if(a0==orbN){a0=w;}
+                if(a1==orbN){a1=w;}
+                orbD2[i*4+0] = (a0>>>0)&255;
+                orbD2[i*4+1] = (a0>>>8)&255;
+                orbD2[i*4+2] = (a1>>>0)&255;
+                orbD2[i*4+3] = (a1>>>8)&255;
+            }
+            //delete from orb states
+            orbD3[w*4+0] = orbD3[orbN*4+0];
+            orbD3[w*4+1] = orbD3[orbN*4+1];
+            orbD3[w*4+2] = orbD3[orbN*4+2];
+            orbD3[w*4+3] = orbD3[orbN*4+3];
+        }
+        window.slctOrb = function(x,y)
+        {
+            x = 2*x/window.innerWidth -1;   x *= cam[2]*cam[3];     x += cam[0];
+            y =-2*y/window.innerHeight+1;   y *= cam[2];            y += cam[1];
+            //find orb
+            var minL = 1;
+            var i2 = -1;
+            for(var i = 0; i < orbN; ++i)
+            {
+                var l1 = orbD1[i*4+0] - x;
+                var l2 = orbD1[i*4+1] - y;
+                var l = l1*l1 + l2*l2;
+                if(l<minL){minL = l; i2 = i;}
+            }
+            return i2;
+        }
+        window.moveOrb = function(w,dx,dy)
+        {
+            //w = which orb
+            dx = 2*dx/window.innerWidth;    dx *= cam[2]*cam[3];
+            dy =-2*dy/window.innerHeight;   dy *= cam[2];
+            orbD1[w*4+0] += dx;
+            orbD1[w*4+1] += dy;
+        }
+        window.moveCam = function(dx,dy)
+        {
+            //w = which orb
+            dx = 2*dx/window.innerWidth;    dx *= cam[2]*cam[3];
+            dy =-2*dy/window.innerHeight;   dy *= cam[2];
+            cam[0] -= dx;
+            cam[1] -= dy;
+        }
+        window.colorToch = function(w)
+        {
+            var j = 0;
+            var l = 999999999;
+            var x = orbD1[w*4+0];
+            var y = orbD1[w*4+1];
+            for(var i = 0; i < orbN; ++i)
+            {
+                if(i == w){continue;}
+                var xl = orbD1[i*4+0] - x;
+                var yl = orbD1[i*4+1] - y;
+                var l2 = xl*xl + yl*yl;
+                if(l2 < l)
+                {
+                    l = l2;
+                    j = i;
+                }
+            }
+            if(l < 2*2)
+            {
+                var a0 = orbD2[w*4+0] | (orbD2[w*4+1]<<8);
+                var a1 = orbD2[w*4+2] | (orbD2[w*4+3]<<8);
+                var b = 0;//writing to which joint
+                var c = j;//2^16-1 = no joint
+                          //     j = ye joint
+                if(a0 == (1<<16)-1){orbD2[w*4 + 0] = (c>>>0)&255;
+                                    orbD2[w*4 + 1] = (c>>>8)&255;
+                                    orbD2[w*4 + 2] = (c>>>0)&255;
+                                    orbD2[w*4 + 3] = (c>>>8)&255;}//ball has 0 joints
+
+                else               {orbD2[w*4 + 2] = (c>>>0)&255;
+                                    orbD2[w*4 + 3] = (c>>>8)&255;}//ball has 1 or 2 joints
+            }
+            else//clone ball
+            {
+                var a = orbN;
+                addOrb(inputX, inputY, 0);
+                orbD3[a*4 + 0] = orbD3[w*4 + 0];
+                orbD3[a*4 + 1] = orbD3[w*4 + 1];
+                orbD3[a*4 + 2] = orbD3[w*4 + 2];
+                orbD3[a*4 + 3] = orbD3[w*4 + 3];
+                grab = a;
+            }
+        }
+        window.iniOrbs = function()
+        {
+            var n = 5; //1 2 4 8 16 32 64 128 256
+            var t1 = 1 << n;
+            var t2 = 1 << t1;
+
+            //fill primordial orbs
+            var w = 0;
+            for(var i = 0; i < n; ++i)
+            {
+                var o = 0;
+                for(var j = 0; j < t1; ++j)
+                {
+                    o = o | (1<<j)*((j>>>i)&1);
+                }
+                orbD3[w] = (o>>> 0) & 255;   ++w;
+                orbD3[w] = (o>>> 8) & 255;   ++w;
+                orbD3[w] = (o>>>16) & 255;   ++w;
+                orbD3[w] = (o>>>24) & 255;   ++w;
+            }
+
+            window.orbN = w>>>2;
+            for(var i = 0; i < orbN; ++i)//primordial orbs 2D positions
+            {
+                orbD1[i*4+0] = i*3-6;
+                orbD1[i*4+1] = 0;
+            }
+            for(var i = 0; i < orbN; ++i)//primordial orbs 2D positions
+            {
+                orbD2[i*4 + 0] = 255;
+                orbD2[i*4 + 1] = 255;
+                orbD2[i*4 + 2] = 255;
+                orbD2[i*4 + 3] = 255;
+            }
+        }
+        window.stepLit = function()
+        {
+            for(var i = 0; i < orbN; ++i)
+            {
+                var a0 = orbD2[i*4+0] | (orbD2[i*4+1]<<8);
+                var a1 = orbD2[i*4+2] | (orbD2[i*4+3]<<8);
+                if(a0 == 65535 || a1 == 65535){continue;}
+                if(orbD1[i*4+2]==0)
+                {
+                    orbD3[i*4+0] = (~(orbD3[a0*4+0] | orbD3[a1*4+0])) & 255;
+                    orbD3[i*4+1] = (~(orbD3[a0*4+1] | orbD3[a1*4+1])) & 255;
+                    orbD3[i*4+2] = (~(orbD3[a0*4+2] | orbD3[a1*4+2])) & 255;
+                    orbD3[i*4+3] = (~(orbD3[a0*4+3] | orbD3[a1*4+3])) & 255;
+                }
+                else
+                {
+                    orbD3[i*4+0] = (~(orbD3[a0*4+0] & orbD3[a1*4+0])) & 255;
+                    orbD3[i*4+1] = (~(orbD3[a0*4+1] & orbD3[a1*4+1])) & 255;
+                    orbD3[i*4+2] = (~(orbD3[a0*4+2] & orbD3[a1*4+2])) & 255;
+                    orbD3[i*4+3] = (~(orbD3[a0*4+3] & orbD3[a1*4+3])) & 255;
+                }
+            }
+        }
+        window.freqBitFlip = function(w,x,y)
+        {
+            x = 2*x/window.innerWidth -1;   x *= cam[2]*cam[3];     x += cam[0];
+            y =-2*y/window.innerHeight+1;   y *= cam[2];            y += cam[1];
+            x = x - orbD1[w*4+0];
+            y = y - orbD1[w*4+1];
+            var a = 32*(Math.atan2(y,x)+Math.PI)/(Math.PI*2);
+            var w1 = a>>>3;
+            var md = a&  7;
+
+            if(inputI != 0){paint = (~(orbD3[w*4+w1] >>> md)) & 1;}
+
+            orbD3[w*4+w1] = (orbD3[w*4+w1] & (~(1<<md)))  | (paint<<md);
+        }
+        window.inputWorld = function()
+        {
+            if(inputO != 0)
+            {
+                var a = slctOrb(inputX, inputY);
+                var b = inputO; inputO = 0;
+                if(a >= 0)//ball
+                {
+                    grab = a;
+                    if(b == 1 && inputU==((1<<0)|(1<<1)))
+                    {
+                        orbD1[grab*4+2] = (orbD1[grab*4+2]==0)|0;
+                        stepLit();
+                    }
+                    if(b == 1 && inputU==(1<<1))
+                    {
+                        findFreqLvL(grab);
+                    }
+                    if(b == 1 && inputU==((1<<0)|(1<<2)))//pair ball with toching ball or add clone ball
+                    {
+                        colorToch(grab);
+                        stepLit();
+                    }
+                    if(b == 1 && inputU==(1<<2))//flip bit of freq
+                    {
+                        freqBitFlip(grab, inputX, inputY);
+                    }
+                    if(b == 2 && inputU==(1<<0))
+                    {
+                        delOrb(grab);
+                        grab = -9;
+                    }
+                    imf = ((orbD3[a*4+0]<< 0)|
+                           (orbD3[a*4+1]<< 8)|
+                           (orbD3[a*4+2]<<16)|
+                           (orbD3[a*4+3]<<24)) >>>0; fillIm1();
+                }
+                else//background
+                {
+                    if(b == 1 && inputU==(1<<0))
+                    {
+                        grab = -1;
+                    }
+                    if(b == 2 && inputU==(1<<2))
+                    {
+                        stepLit();
+                    }
+                    if(b == 2 && inputU==(1<<0))
+                    {
+                        addOrb(inputX, inputY, 0);
+                    }
+                    if(b == 2){grab = -9;}
+                }
+                if(b == 3)
+                {
+                    grab = -9;
+                }
+            }
+            if(inputXd != 0 || inputYd != 0)
+            {
+                if(grab >= 0 && inputU2==(1<<0))
+                {
+                    moveOrb(grab, inputXd, inputYd);
+                    //colorToch(grab);
+                }
+                if(grab == -1 && inputU2==(1<<0))
+                {
+                    moveCam(inputXd, inputYd);
+                }
+                if(grab >= 0 && inputU2==(1<<2))//flip bit of freq
+                {
+                    freqBitFlip(grab, inputX, inputY);
+                }
+                inputXd = 0;
+                inputYd = 0;
+            }
+            if(inputZ != 0)
+            {
+                var ix = 2*(                     inputX)/window.innerWidth -1;
+                var iy = 2*(window.innerHeight-1-inputY)/window.innerHeight-1;
+                var x = cam[0] + ix*cam[2]*cam[3];
+                var y = cam[1] + iy*cam[2];
+                if(inputZ>0){cam[2] *=   1.25;}
+                if(inputZ<0){cam[2] *= 1/1.25;}
+                cam[0] = x - ix*cam[2]*cam[3];
+                cam[1] = y - iy*cam[2];
+
+                inputZ = 0;
+            }
+            inputI = 0;
+            //collapse();
+        }
+    
+        iniOrbs();
+    }
+    var rendor = false;
+    function rendDo()
+    {
+        if(rendor){return;}
+        rendor = true;
+        window.requestAnimationFrame(render);
+    }
+    function render()
+    {
+        rendor = false;
+
+        inputWorld();
+
+        fillIm2();
+
+        //update input data
+        shaderMtx[2] = inputX;
+        shaderMtx[3] = window.innerHeight-inputY;
+        //update camera data
+        shaderMtx[4] =   cam[0];
+        shaderMtx[5] =   cam[1];
+        shaderMtx[6] = 1/cam[2];
+        shaderMtx[7] = 1/cam[3];
+        //update jonts data
+        shaderMtx[8] = .125; //blue jont width
+        shaderMtx[12] = orbNMAX;//jont color
+        shaderMtx[14] = window.innerWidth;
+        shaderMtx[15] = window.innerHeight;
+
+        gl.activeTexture(gl.TEXTURE0);  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,     imx,imx*2, gl.RGBA, gl.UNSIGNED_BYTE,    im);
+        gl.activeTexture(gl.TEXTURE1);  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, orbNMAX,    1, gl.RGBA,         gl.FLOAT, orbD1);
+        gl.activeTexture(gl.TEXTURE2);  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, orbNMAX,    1, gl.RGBA, gl.UNSIGNED_BYTE, orbD2);
+        gl.activeTexture(gl.TEXTURE3);  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, orbNMAX,    1, gl.RGBA, gl.UNSIGNED_BYTE, orbD3);
+
+        gl.clearColor(.5,.5,.5, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        //draw jonts
+        gl.useProgram(shaderP1);
+        gl.uniform1i(shdTex10, 1);
+        gl.uniform1i(shdTex11, 2);
+        gl.uniformMatrix4fv(shdMtx1, gl.FALSE, shaderMtx);
+        gl.vertexAttribPointer(shdVtx1, 1, gl.FLOAT, 0, 0, 0);
+        gl.enableVertexAttribArray(shdVtx1);
+        gl.drawArrays(gl.TRIANGLES, 0, orbN*3*2*2);//two jots each has two triangles
+        //draw orbs
+        gl.useProgram(shaderP0);
+        gl.uniform1i(shdTex00, 1);
+        gl.uniform1i(shdTex01, 3);
+        gl.uniformMatrix4fv(shdMtx0, gl.FALSE, shaderMtx);
+        gl.vertexAttribPointer(shdVtx0, 1, gl.FLOAT, 0, 0, 0);
+        gl.enableVertexAttribArray(shdVtx0);
+        gl.drawArrays(gl.TRIANGLES, 0, orbN*3);
+        //draw map
+        gl.useProgram(shaderP2);
+        gl.uniform1i(shdTex2, 0);
+        gl.uniformMatrix4fv(shdMtx2, gl.FALSE, shaderMtx);
+        gl.vertexAttribPointer(shdVtx2, 1, gl.FLOAT, 0, 0, 0);
+        gl.enableVertexAttribArray(shdVtx2);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+</script>
+</head>
+<body>
+</body>
+</html>
