@@ -1,0 +1,1716 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>3Dsound</title>
+</head>
+
+<body>
+    <script>
+    // file:///C:/Users/myname/Desktop/soundBF/3Dsound.html
+    // upload unifrm values efficiently, faster readMRI shader, UI controls contrast and flip
+    //
+    // hvo   = ear to ear length in pixels
+    // hme   = ear to ear length in meters
+    // vo/st = sound air speed in pixels per step
+    // me/sc = sound air speed in meters per second
+    // hvo/(vo/st) * (me/sc)/hme
+
+    start = function()
+    {
+        iniHTML();
+    };
+    window.onload = start;  
+
+    gameZ   = 640;
+    gameF   = 3;
+    sndP    = 142;                                      //pixels ear to ear
+    sndVS   = .063;
+    sndVS2  = Math.sqrt(sndVS*sndVS/6*2);                   //sound air speed in pixels per step
+    sndR    = sndP/(sndVS2/1) * (342/1)/.135 |0;
+    sndT    = 1;                                        //sound duration in seconds
+    sndTR   = (sndT*sndR)|0;
+    sndTR2  = (sndT*sndR)|0;
+    sndCh   = 2;
+    sndHZL  = 1;                                        //downsample lowest  hz to include
+    sndHZH  = 22000;                                    //downsample highest hz to include
+    unifrmZ = 32;
+    cThrds  = 32;
+    cThrds2 = 256;
+    screnX  = 16;
+    screnY  = 16;
+    loops   = 0;                               //physics steps per frame
+    cam     = new Float32Array([1,0,0, -2,0,0, 2,1]);   //camera dir pos rot move
+    brs     = 6;                                        //brush size in voxels
+    lncZ    = 4;                                        //lanczos kernel size
+    //rngMv = new Float32Array([0,0,0,1]);//3pos 1zoom
+    rngMv = new Float32Array([4, 38, -96, 1.3232421875]);//3pos 1zoom  CT_IMAGE(704)
+
+    var myWGSL = function()
+    {
+        return `
+    const dZ   =`+gameZ+`u;       
+    const dF   =`+gameF+`u;
+    const cT   =`+cThrds+`u;
+    const cT2  =`+cThrds2+`u;
+    const sR   =`+sndR+`u;
+    const sP   =`+sndP+`u;
+    const sTR  =`+sndTR+`u;
+    const sTR2 =`+sndTR2+`u;
+    const lZ   =`+lncZ+`f;
+    const aC   =`+sndVS+`f;
+    const qSR  =`+sQx.sampleRate+`f;
+    const hzL  =`+sndHZL+`f;
+    const hzH  =`+sndHZH+`f;
+    const rZ   = 1f;          //can not be changed
+    const wA   = .92f;        //wall absorption
+    const PI   = 3.1415926535897932f;                   // ear1 +-44.f can be done
+    const ear1 = vec3<f32>(-f32(sP)+44.f,-8.,-16.)/f32(dZ);//vec3<f32>(-f32(sP)+46.f,-17.,-13.)/f32(dZ);  //vec3<f32>(-f32(sP),-34.56,-19.20)
+    const ear2 = vec3<f32>( f32(sP)-44.f,-8.,-10.)/f32(dZ);//vec3<f32>( f32(sP)-46.f,-17.,-21.)/f32(dZ);  //vec3<f32>( f32(sP),-34.56,-34.56)
+    const ear1u = vec3<u32>((ear1*.5f+.5f)*f32(dZ));
+    const ear2u = vec3<u32>((ear2*.5f+.5f)*f32(dZ));
+    const brsd = 66f; //brush distance form camera in voxels
+    const hzS  = 32u; //how many freq to save 
+    struct UniD
+    {
+        time   : u32,
+        music  : u32,
+        camPX  : f32,
+        camPY  : f32,
+        camPZ  : f32,
+        camDX  : f32,
+        camDY  : f32,
+        camDZ  : f32,
+        mouC   : u32,
+        brs    : f32,
+        srcX   : f32,
+        srcY   : f32,
+        srcZ   : f32,
+        srcW   : f32,
+        scanP  : f32,
+        scanW  : f32,
+        flipX  : f32,
+        flipY  : f32,
+        flipZ  : f32,
+    }
+    @binding(0) @group(0) var<uniform> uni: UniD;
+    @binding(1) @group(0) var<storage, read_write> D0: array<f32>;
+    @binding(2) @group(0) var<storage, read_write> D1: array<f32>;
+    @binding(3) @group(0) var<storage, read_write> D2: array<f32>;
+    @binding(4) @group(0) var<storage, read_write> sdo: array<f32>;
+    @binding(5) @group(0) var<storage, read_write> img: array<f32>;
+    @binding(6) @group(0) var<storage, read_write> mri: array<f32>;
+    @binding(7) @group(0) var screen: texture_storage_2d<bgra8unorm, write>;
+
+    var<workgroup> frqS: array<vec2f,cT2>;//*hzS>;
+
+    fn c31(a: vec3<u32>) -> u32{return a.x + a.y*dZ + a.z*dZ*dZ;}
+    fn g31(a: vec3<f32>, b: vec3<f32>) -> i32
+    {
+        var ai = vec3<i32>(a);
+        var bi = vec3<i32>(b);
+        return ai.x + ai.y*bi.x + ai.z*bi.x*bi.y;
+    }
+    fn gF(x: u32) -> u32 {return dZ*dZ*dZ * ((uni.time-x +dF) % dF);}
+    fn mod1(a:      f32 , b: f32) ->      f32 {return fract(a/b)*b;}
+    fn mod2(a: vec2<f32>, b: f32) -> vec2<f32>{return fract(a/b)*b;}
+    fn mod3(a: vec3<f32>, b: f32) -> vec3<f32>{return fract(a/b)*b;}
+    @compute @workgroup_size(cT, 1, 1)
+    fn mainC(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var id = c31(id3);
+        var p  = vec3<f32>(id3)+.5f;
+        var s  = 0.f;
+        for(var z=-rZ; z<=rZ; z+=1.f){
+        for(var y=-rZ; y<=rZ; y+=1.f){
+        for(var x=-rZ; x<=rZ; x+=1.f){
+            var xyz = vec3<f32>(x,y,z);
+            var l2  = dot(xyz,xyz);
+            if(l2<.1f||l2>rZ*rZ+.1f){continue;}
+            var i2 = vec3<u32>(mod3(p+xyz,f32(dZ)));
+            //var i2 = vec3<u32>(clamp(p+xyz,vec3f(0),vec3f(f32(dZ-1u))));
+            var i1 = c31(i2);
+            var d1 = D1[i1];
+            var im = img[i1];//.061*1.4 * .061*1.4;//img[i1];
+            var k  = img[i1+dZ*dZ*dZ];
+            s += (2.f-k)*d1*im*(1./6.f);
+        }}}
+        var d1 = D1[id];
+        var d2 = D2[id];
+        var im = img[id];//.061*1.4 * .061*1.4;//img[id];
+        var k  = img[id+dZ*dZ*dZ];
+        var d  = s + (d1-d1*im)*(2.f-k) - (d2-d2*k);
+        D0[id] = d;
+    }
+    @compute @workgroup_size(2,1,1)
+    fn mainC1(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var id = id3.x;
+                 var e = ear2u;
+        if(id != 0u){e = ear1u;}
+        sdo[sTR*id + uni.time] = D0[e.x + e.y*dZ + e.z*dZ*dZ];
+    }
+    fn waveExpand(l:f32, t:f32) -> f32   //expanding wave from point integral solu
+    {
+        var wid = 1.f/6.f;
+        var ww4 = wid*wid/4.;
+        var tl1 = t - l;        //t = time since explosion
+        var tl2 = t + l;        //l = distance to explosion center to see
+        return (-tl1/exp(tl1*tl1*ww4)
+                +tl2/exp(tl2*tl2*ww4))*4f*sqrt(PI)/(4f*l);
+    }
+    @compute @workgroup_size(cT, 1, 1)
+    fn mainC2(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var id = c31(id3);
+        var p  = vec3<f32>(id3);
+        var p2 = vec3<f32>(uni.srcX,
+                           uni.srcY,
+                           uni.srcZ);//*.35f;
+        var mk = uni.brs;// headphone pulse on-off
+        var pl = length(p2);
+        var bl = .45f;                                       //base length, wave always starts here
+        if(mk!=0.f){bl = .55f;}
+        var p3 = p-(p2*.5f+.5f)*f32(dZ);//-.0001f;
+        var v  = sqrt(aC*aC/6.f*2.f);
+        var c1 = abs(bl-pl)*.5f*f32(dZ);
+        var x  = length(p3);
+        var an = acos(-dot(p3,normalize(p2))/x);
+            an = max(an-.3f,0f)*x;
+            an = 1f/exp(.03f*an*an);
+        var d1 = waveExpand(x,c1+v*1f)*an;
+        var d2 = waveExpand(x,c1     )*an;
+        var d  = 88.f/exp(.1f*dot(p3,p3));
+        var he = 99.f/exp(.01f*dot(p3,p3*vec3f(0,1,1)));    //headphones membrane
+        if(mk!=0.f)
+        {
+            d1 *= he;
+            d2 *= he;
+        }
+        //if(uni.time==0u)
+        //{
+        //    var evw = (p-f32(dZ)*.5f)*.3f;
+        //    d1 = 99f/exp(dot(evw,evw));
+        //    d2 = 99f/exp(dot(evw,evw));
+        //}
+        //D0[id] = 0f;
+        D1[id] = d1;//1f/exp(.005f*dot(p3,p3));//f32(x<.5f)*222.f;//d1;
+        D2[id] = d2;//1f/exp(.005f*dot(p3,p3));//f32(x<.5f)*222.f;//d2;
+        //img[id] = 0.f;
+    }
+    @compute @workgroup_size(cT2, 1, 1)
+    fn mainFT(@builtin(global_invocation_id) id3: vec3<u32>,
+              @builtin(local_invocation_id) lid3: vec3<u32>,
+              @builtin(workgroup_id)        wid3: vec3<u32>)
+    {
+        var wid =  id3.x;//writing position
+        var lid = lid3.x;//reading position
+        var rl  = wid3.y;//right or left channel
+        var r0  = sTR*rl;
+        var w   = sTR*2u + sTR2*rl + wid;
+        if(wid < sTR2){sdo[w] = 0f;}
+        frqS[lid] = vec2f(0);
+        for(var frq = hzL; frq < hzH; frq+=1.f)
+        {
+            var s = vec2f(0);
+            var r = lid;
+            while(r < sTR)
+            {
+                var d = sdo[r0 + r];
+                var m = cos(-1.f *PI*2.f *(1.f/f32(sR))* frq *f32(r) - vec2f(.0,.5)*PI);
+                s += d*m;
+                r += cT2;
+            }
+            frqS[lid] = s;                      workgroupBarrier();
+            for(var i = cT2/2u; i > 0u; i/=2u)
+            {
+                var f = frqS[(lid+i) % cT2];    workgroupBarrier();
+                frqS[lid] += f;                 workgroupBarrier();
+            }
+            s = frqS[0]*(1f/f32(sTR));
+            var m  = cos(-1f *PI*2f *(1f/f32(qSR))* frq *f32(wid) - vec2f(.0,.5)*PI);
+            var ms = dot(m,s)*2f;
+            if(wid < sTR2){sdo[w] += ms;}
+        }
+    }
+    @compute @workgroup_size(cT, 1, 1)
+    fn mainBRUSH(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var camPos = vec3<f32>(uni.camPX,
+                               uni.camPY,
+                               uni.camPZ);
+        var camDir = vec3<f32>(uni.camDX,
+                               uni.camDY,
+                               uni.camDZ);
+        var id = c31(id3);
+        var p  = vec3<f32>(id3)+.5f;
+            p  = p-((camPos*.5f+.5f)*f32(dZ)+camDir*brsd);
+        var a = f32((uni.mouC>>0)&1u)*1.f+
+                f32((uni.mouC>>2)&1u)*0.f;
+        if(length(p)<uni.brs)
+        {
+            img[id] = a;
+        }
+    }
+    fn lanczos(x:f32, a:f32) -> f32
+    {
+        if(x==0.f){return 1.f;}
+        var xp = PI*x;
+        return a*sin(xp)*sin(xp/a)/(xp*xp);
+    }
+    @compute @workgroup_size(cT, 1, 1)
+    fn mainMRI1(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var miv = uni.scanP;
+        var mav = uni.scanW;
+        var ixyz = vec3<f32>(uni.camPX,   //axis slices
+                             uni.camPY,
+                             uni.camPZ);
+        var gxyz = vec3<f32>(uni.camDX,   //axis slice thichness
+                             uni.camDY,
+                             uni.camDZ);
+        var mxyz = vec3<f32>(uni.srcX,
+                             uni.srcY,
+                             uni.srcZ);
+        var zoom = uni.srcW;
+        var flpv = vec3<f32>(uni.flipX,
+                             uni.flipY,
+                             uni.flipZ);
+        var xyz = vec3<f32>(id3);
+            xyz = mix(xyz, f32(dZ)-1f-xyz, flpv);
+
+        xyz = xyz.xzy;
+        //gxyz = gxyz.xzy;
+
+        var v = 0.f;
+        //var v = miv;//bones
+        
+        gxyz *= ixyz;
+        var gm = max(gxyz.x,gxyz.y);
+            gm = max(gxyz.z,gm);
+        var ff = f32(dZ)*(384f/640f)*zoom;//resize data biggest axis to this
+        var fxyz = ff*gxyz/gm;
+        var ifxyz = ixyz/fxyz;
+        //miv = 0;
+        //mav = 444;
+        var sxyz = floor((f32(dZ)-fxyz)/2.f);
+            sxyz+= mxyz;
+            //sxyz+= vec3f(7,22,4);
+        var rxyz  = (xyz-sxyz)*ifxyz;
+        var flxyz = floor(rxyz);
+        var frxyz = rxyz-flxyz;
+        const mode = 1;
+        if(mode==0)//floored resampling
+        {
+            v = miv;
+            if( all(flxyz>=vec3f(0)) &&
+                all(flxyz<     ixyz) ){v = mri[g31(flxyz,ixyz)];}
+        }
+        if(mode==1)//lanczos resampling
+        {
+            for(var az = -lZ; az <= lZ; az+=1.f){
+            for(var ay = -lZ; ay <= lZ; ay+=1.f){
+            for(var ax = -lZ; ax <= lZ; ax+=1.f){
+                var axyz = vec3f(ax,ay,az);
+                var flaxyz = flxyz-axyz;
+                var fraxyz = frxyz+axyz;
+                var ld = miv;
+                if( all(flaxyz>=vec3f(0)) &&
+                    all(flaxyz<     ixyz) ){ld = mri[g31(flaxyz,ixyz)];}
+                v += ld*lanczos(fraxyz.x,lZ)
+                       *lanczos(fraxyz.y,lZ)
+                       *lanczos(fraxyz.z,lZ);
+            }}}
+        }
+        v = (v-miv)/(mav-miv);
+        // var xyz2 = xyz-.5f*f32(dZ);
+        // if(dot(xyz2,xyz2)>pow(138.24f,2.f)){v=0.f;}//else{v+=.03f;} //cut 3D data sphere
+        // v = clamp(v+.01f,aC,.9f);
+        // //if(v>aC+.001f){v=.7f;}
+        // //v = min(v*1.1f,.9f);
+        //v = v*v;
+        //img[id3.x + id3.z*dZ + id3.y*dZ*dZ] = v;
+        img[c31(id3)] = v;
+    }
+    @compute @workgroup_size(cT, 1, 1)
+    fn mainMRI2(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var id  = c31(id3);
+        var x   = i32(id3.x);
+        var y   = i32(id3.y);
+        var z   = i32(id3.z);
+        var dZi = i32(dZ);
+        var dZi1= i32(dZ)-1;
+        //img[id] = (img[id]-.061f*1.4f*1.01f)*4.f;
+        var r0  =       sqrt(img[x + y*dZi + z*dZi*dZi]);
+        var a   = ( abs(sqrt(img[min(x+1,dZi1) +     y        *dZi +     z        *dZi*dZi])-r0)
+                   +abs(sqrt(img[max(x-1,   0) +     y        *dZi +     z        *dZi*dZi])-r0)
+                   +abs(sqrt(img[    x         + min(y+1,dZi1)*dZi +     z        *dZi*dZi])-r0)
+                   +abs(sqrt(img[    x         + max(y-1,   0)*dZi +     z        *dZi*dZi])-r0)
+                   +abs(sqrt(img[    x         +     y        *dZi + min(z+1,dZi1)*dZi*dZi])-r0)
+                   +abs(sqrt(img[    x         +     y        *dZi + max(z-1,   0)*dZi*dZi])-r0));
+        img[id+dZ*dZ*dZ] = a*.01f;
+    }
+    fn inferno(p:vec3<f32>) -> vec4<f32>
+    {
+        var a = cos(p*vec3<f32>(.19,.23,.17)+4.f)*.3f+.5f;
+        return vec4<f32>(a,0);
+    }
+    @compute @workgroup_size(cT, 1, 1)
+    fn mainR(@builtin(global_invocation_id) id3: vec3<u32>)
+    {
+        var screenSize = textureDimensions(screen);
+        var screenSiz2 = vec2f(screenSize);
+        if(any(id3.xy >= screenSize)){return;}
+
+        var u = (vec2f(id3.xy)*2.f-screenSiz2)/screenSiz2.y;
+            u*= vec2<f32>(1,-1);
+        var camPos = vec3<f32>(uni.camPX,
+                               uni.camPY,
+                               uni.camPZ);
+        var camDir = vec3<f32>(uni.camDX,
+                               uni.camDY,
+                               uni.camDZ);
+        var bd = (camPos*.5f+.5f)*f32(dZ)+camDir*brsd;
+        var mtx0 = normalize(vec3<f32>(camDir.z,0.f,-camDir.x));
+        var mtx  = mat3x3<f32>(mtx0, cross(camDir,mtx0), camDir);
+        var ray  = mtx*normalize(vec3<f32>(u,2.f));             //direction of ray from camera
+        var ray2 = 1.f/ray;
+        var ray3 = step(vec3<f32>(0),ray)*2.f-1.f;
+        
+            var inc  = step(camPos,vec3<f32>( 1))*              //inside cube
+                          step(vec3<f32>(-1),camPos);
+            var tMin = (vec3<f32>(-1)-camPos)*ray2;
+            var tMax = (vec3<f32>( 1)-camPos)*ray2;    ray2 = abs(ray2);
+            var t1 = min(tMin, tMax);
+            var t2 = max(tMin, tMax);
+            var tN = max(max(t1.x, t1.y), t1.z);                //length of ray between camera and simulationCube
+            var tF = min(min(t2.x, t2.y), t2.z);
+                tF = f32(tF>tN);
+        
+        var p2= (camPos*.5f+.5f)*f32(dZ);
+        var p = camPos+ray*tN*(1.f-inc.x*inc.y*inc.z)*1.001f;   //collision position of ray on simulationCube 
+            p = (p*.5f+.5f)*f32(dZ);                            //transform to voxels coordinates, range 0 to x3
+        var lig = vec4<f32>(1);                                 //light created by camera going to voxels
+        var rif = vec4<f32>(0);                                 //reflected light by voxels going to camera
+        for(var i=0u; i<dZ*3u; i++)                             //ray will transverse simulationCube's voxels
+        {
+            var g = (1.f-fract(p*ray3))*ray2;
+            var l = min(min(g.x,g.y),g.z);              
+            var r = c31(vec3<u32>(p)); 
+
+            //color wave
+            var t = D1[r];
+            var c = mix(vec4<f32>(.2,1,.2,0),vec4<f32>(.2,.2,1,0),clamp(t+.5f,0f,1f));
+            var n = abs(t)*l*lig*.5f;
+            rif += n*lig*c;
+            lig  = lig-n;
+
+            //color physical transparency
+            t = img[r];//+dZ*dZ*dZ];
+            t = max((t-uni.scanP)*uni.scanW,0.f);
+            c = vec4<f32>(clamp(t*2f,0f,1f));
+            n = t*l*lig*.4f;
+            rif += n*lig*c;
+            lig  = lig-n;
+
+            p  += l*1.001f*ray;
+            var o = abs(p*(2.f/f32(dZ))-1.f);
+            if(o.x>=1.f||o.y>=1.f||o.z>=1.f){break;}    
+        }
+        var d1 = camPos+ray*abs(dot(ray, ear1-camPos))-ear1;
+        var d2 = camPos+ray*abs(dot(ray, ear2-camPos))-ear2;
+        rif += f32(dot(d1,d1)<.00001f) + f32(dot(d2,d2)<.00001f);
+        textureStore(screen, id3.xy, rif*tF*2.f);
+    }`;};
+
+    iniWebGPU = function()
+    {
+        requi = {requiredFeatures : ['bgra8unorm-storage'],
+                 requiredLimits   : {maxBufferSize               : Math.pow(2,31)-64,
+                                     maxStorageBufferBindingSize : Math.pow(2,31)-64,}};
+        
+        navigator.gpu.requestAdapter()
+        .then(adapter => adapter.requestDevice(requi))
+        .then(device  => iniWebGPU2(device));
+    };
+    iniWebGPU2 = function(devicE)
+    {
+        device = devicE;
+
+        context = canvas.getContext('webgpu');
+        presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+
+        context.configure({
+            device: device,
+            format: presentationFormat,
+            usage: GPUTextureUsage.STORAGE_BINDING,
+            //alphaMode: 'premultiplied',
+        });
+
+        myShader = device.createShaderModule({ code: myWGSL() });
+
+        bindGroupLayout0 = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'uniform', },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'storage', },
+                },
+                {
+                    binding: 2,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'storage', },
+                },
+                {
+                    binding: 3,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'storage', },
+                },
+                {
+                    binding: 4,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'storage', },
+                },
+                {
+                    binding: 5,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'storage', },
+                },
+                {
+                    binding: 6,
+                    visibility: GPUShaderStage.COMPUTE,
+                    buffer: { type: 'storage', },
+                },
+                {
+                    binding: 7,
+                    visibility: GPUShaderStage.COMPUTE,
+                    storageTexture: { format : "bgra8unorm",//bgra8unorm  rgba8unorm
+                                      access : "write-only",
+                                      viewDimension : "2d", },
+                },
+            ],
+        });
+
+        uniBuffer = device.createBuffer({
+            size: unifrmZ * Uint32Array.BYTES_PER_ELEMENT,
+            usage:
+                GPUBufferUsage.STORAGE |
+                GPUBufferUsage.UNIFORM |
+                GPUBufferUsage.COPY_DST,
+            mappedAtCreation: false,
+        });
+
+        bufferD0 = device.createBuffer({
+            size: gameZ*gameZ*gameZ*4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: false,
+        });
+        bufferD1 = device.createBuffer({
+            size: gameZ*gameZ*gameZ*4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: false,
+        });
+        bufferD2 = device.createBuffer({
+            size: gameZ*gameZ*gameZ*4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: false,
+        });
+        bufferSDO = device.createBuffer({
+            size: (sndTR*sndCh  +  sndTR2*sndCh)*4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+            mappedAtCreation: false,
+        });
+        buffer1 = device.createBuffer({
+            size: gameZ*gameZ*gameZ*2*4,
+            usage: GPUBufferUsage.STORAGE,
+            mappedAtCreation: false,
+        });
+        bufferMRI = device.createBuffer({//dummy code
+            size: 1024,
+            usage: GPUBufferUsage.STORAGE,
+            mappedAtCreation: false,
+        });
+
+        computePipeline0 = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainC',
+            },
+        });
+        computePipeline1 = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainC1',
+            },
+        });
+        computePipeline2 = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainC2',
+            },
+        });
+        computePipelineFT = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainFT',
+            },
+        });
+        computePipelineBRUSH = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainBRUSH',
+            },
+        });
+        computePipelineMRI1 = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainMRI1',
+            },
+        });
+        computePipelineMRI2 = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainMRI2',
+            },
+        });
+        computePipelineR = device.createComputePipeline({
+            layout: device.createPipelineLayout({
+                bindGroupLayouts: [bindGroupLayout0],
+            }),
+            compute: {
+                module: myShader,
+                entryPoint: 'mainR',
+            },
+        });
+
+        //sound
+        buffer2 = device.createBuffer({
+            size: sndTR2*sndCh*4,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        });
+
+        uda = new ArrayBuffer(unifrmZ*4);//small upload to GPU
+        
+        //ini img buffer
+        //view = context.getCurrentTexture().createView();
+        //bindGroup0 = device.createBindGroup({
+        //    layout: bindGroupLayout0,
+        //    entries: [
+        //        { binding: 0, resource: { buffer: uniBuffer } },
+        //        { binding: 1, resource: { buffer: bufferD0  } },
+        //        { binding: 2, resource: { buffer: bufferD1  } },
+        //        { binding: 3, resource: { buffer: bufferD2  } },
+        //        { binding: 4, resource: { buffer: bufferSDO } },
+        //        { binding: 5, resource: { buffer: buffer1   } },
+        //        { binding: 6, resource: { buffer: bufferMRI } },
+        //        { binding: 7, resource: view                  },
+        //    ],
+        //});
+        //commandEncoder = device.createCommandEncoder();
+        //passEncoderCompute = commandEncoder.beginComputePass();
+        //passEncoderCompute.setPipeline(computePipeline2);
+        //passEncoderCompute.setBindGroup(0, bindGroup0);
+        //passEncoderCompute.dispatchWorkgroups(gameZ/cThrds,gameZ,gameZ);
+        //passEncoderCompute.end();
+        //device.queue.submit([commandEncoder.finish()]);
+
+        requestAnimationFrame(render);
+    };
+    iniHTML = function()
+    {
+        document.body.style.backgroundColor = "rgb(44,44,44)";
+        document.body.style.color = "rgb(255,255,255)";
+
+        canvas = document.createElement("canvas");
+        canvas.style.position = "absolute";
+        canvas.style.top  = "0px";
+        canvas.style.left = "0px";
+        canvas.style.width  = "512px";
+        canvas.style.height = "512px";
+        canvas.width  = 512;
+        canvas.height = 512;
+        document.body.appendChild(canvas);
+
+        winrez = function()
+        {
+            screnX = window.innerWidth;
+            screnY = window.innerHeight;
+            canvas.style.width  = screnX+"px";
+            canvas.style.height = screnY+"px";
+            canvas.width  = screnX;
+            canvas.height = screnY;
+        };
+        window.onresize = winrez;
+        winrez();
+
+        lodFile = function(e)
+        {
+            if(e.target.files.length==0){return;}
+            if(e.target.files[0].name.includes(".bin"))
+            {
+                e.target.files[0].arrayBuffer().then(buff => getHead(buff));
+            }
+            if(e.target.files[0].name.includes(".nii"))
+            {
+                e.target.files[0].arrayBuffer().then(buff => getMRI(buff));
+            }
+            if(e.target.files[0].name.includes(".nrrd"))
+            {
+                e.target.files[0].arrayBuffer().then(buff => getNRRD(buff));
+            }
+            if(e.target.files[0].name.includes(".dcm"))
+            {
+                dcmL = new Array();
+                let jobs = new Array(e.target.files.length);
+                for(let i = 0; i < e.target.files.length; i++)
+                {
+                    jobs[i] = e.target.files[i].arrayBuffer().then(buff => dcmL.push(buff));
+                }
+                Promise.all(jobs).then(getDICOM);
+            }
+        };
+        butfile = document.createElement("input");
+        butfile.style.position = "absolute";
+        butfile.style.top   =   "0px";
+        butfile.style.left  =   "0px";
+        //butfile.style.width = "300px";
+        butfile.type = "file";
+        butfile.multiple = "multiple";
+        butfile.onchange = lodFile;
+        document.body.appendChild(butfile);
+
+        //sound
+        sQx = null;
+        myAudioC = 0;
+        myAudioN = 0;
+        myAudioM = 0;
+        myAudioP = null;
+        iniAudio  = function()
+        {
+            if(sQx != null){return;}
+            sQx = new window.AudioContext();
+            gainNd = sQx.createGain();
+            gainNd.gain.value = .5;
+            gainNd.connect(sQx.destination);
+            iniSndToSim();
+            iniWebGPU();
+        };
+        audioPlay = function()
+        {
+            let sb = sQx.createBuffer(sndCh, sndTR2, sQx.sampleRate);
+            for(let i = 0; i<sndCh; i++)
+            {
+                let d = sb.getChannelData(i);
+                for(let j = 0; j < sndTR2; ++j)
+                {
+                    d[j] = sndD[i*sndTR2+j];
+                }
+            }
+            audNd = sQx.createBufferSource();
+            audNd.onended = audioStop;
+            audNd.buffer  = sb;
+            audNd.connect(gainNd);
+            audNd.start();
+        }; 
+        audioStop = function()
+        {
+            if(audNd != null){audNd.onended = null;  audNd.stop();  audNd.disconnect();  audNd = null;}
+        };
+        invConv = function()
+        {
+            ////compute inverse convolution
+            let r1 = sndTR2/myAudioN*(myAudioN-2) |0;
+            let r2 = sndTR2/myAudioN*(myAudioN-1) |0;
+            let dv = sndTR2/myAudioN              |0;
+            let rl  = new Int32Array([r1,r2]);
+            let inv = new Float32Array(dv*sndCh);
+            let cov = new Float32Array(dv*sndCh);
+            let mm = 1111;
+            for(let ch = 0; ch < sndCh; ch++){
+                for(let i = 0; i < dv; i++){let a = -cov[dv*ch + i]; if(i==0){a = 1;}   inv[dv*ch + i] = a/(sndD[sndTR2*ch + rl[ch] + 0]*mm);
+                for(let j = i; j < dv; j++){
+                    cov[dv*ch + j] += mm*sndD[sndTR2*ch + rl[ch] + j-i]*inv[dv*ch + i];
+                }}
+            }
+            //apply inverse convolution
+            let sndD3 = new Float32Array(r1*sndCh);//last 2 pulses from sndD removed
+            for(let ch = 0; ch < sndCh; ch++){
+            for(let k  = 0; k < myAudioN-2; k++){ let rw = sndTR2/myAudioN*k |0;
+                for(let i = 0; i < dv; i++){ let m = inv[dv*ch + i];
+                for(let j = i; j < dv; j++){
+                    sndD3[r1*ch + rw + j] += sndD[sndTR2*ch + rw + j-i] * m;
+                }}
+            }}
+            sndD = sndD3;
+        };
+        readBuff = function()
+        {
+            sndD = new Float32Array(buffer2.getMappedRange().slice());
+            buffer2.unmap();
+
+                                             let mx = 0;
+            for(let i = 0; i < sndD.length; i++){mx = Math.max(mx,Math.abs(sndD[i]));}  console.log("sound max value "+mx);
+                                                 mx = 1/mx;
+            for(let i = 0; i < sndD.length; i++){sndD[i] *= mx;}
+
+            //invConv();
+            visualwav();
+            //audioPlay();
+        };
+        iniSndToSim = function()
+        {
+            let se = .5;                    //semi separation between points
+            let yc = Math.PI*1;             //y circumference
+            let yd = Math.floor(yc/se)+1;   //y divisions
+            let ys = 0;                     //y step
+            let xzs= 0;                     //xz step
+            let count = 0;
+            while(ys < yd)
+            {
+                let y = Math.cos(ys/yd*Math.PI);
+                let xzr = Math.sqrt(1-y*y);             //xz radius
+                let xzc = 2*Math.PI*xzr;                //xz circumference
+                let xzd = Math.floor(xzc/se)+1;         //xz angle total divisions
+                let xza = (xzs + .5*(ys&1))/xzd;        //xz angle
+                let x = Math.cos(xza*Math.PI*2)*xzr;
+                let z = Math.sin(xza*Math.PI*2)*xzr;
+                count++;
+                xzs++; if(xzs==xzd){xzs=0; ys++;}
+            }
+            ys = 0;
+            xzs= 0;
+            sRep     = 4;                                //repeated layers of pulses
+            myAudioN = count*sRep;
+            myAudioM = sndR*.001 |0;                   //duration of each pulse
+            myAudioP = new Float32Array(myAudioN*4);    //4 = 3D pos and 1 mark headphone pulses
+            for(let i=0; i<count; i++)
+            {
+                let y = Math.cos(ys/yd*Math.PI);
+                let xzr = Math.sqrt(1-y*y);             //xz radius
+                let xzc = 2*Math.PI*xzr;                //xz circumference
+                let xzd = Math.floor(xzc/se)+1;         //xz angle total divisions
+                let xza = (xzs + .5*(ys&1))/xzd;        //xz angle
+                let x = Math.cos(xza*Math.PI*2)*xzr;
+                let z = Math.sin(xza*Math.PI*2)*xzr;
+                xzs++; if(xzs==xzd){xzs=0; ys++;}
+                myAudioP[i*4+0] = x *.4/.5;
+                myAudioP[i*4+1] = y *.4/.5;
+                myAudioP[i*4+2] = z *.4/.5;
+                myAudioP[i*4+3] = 0;
+            }
+            for(let j=1; j< sRep; j++){
+            for(let i=0; i<count; i++){
+                let w = (count*j+i)*4;
+                myAudioP[w+0] = myAudioP[i*4+0]*Math.pow(2,j*.7);
+                myAudioP[w+1] = myAudioP[i*4+1]*Math.pow(2,j*.7);
+                myAudioP[w+2] = myAudioP[i*4+2]*Math.pow(2,j*.7);
+                myAudioP[w+3] = 0;
+            }}
+
+            //just a circle
+            let cin = 7;
+            let hey = 0;//headphone simulation
+            myAudioN = cin+2*hey;
+            myAudioP = new Float32Array(myAudioN*4);
+            for(let i=0; i<cin; i++)
+            {
+                let a = 2*Math.PI*i/cin +.3;
+                myAudioP[i*4+0] = Math.cos(a)*2;
+                myAudioP[i*4+1] = 0;
+                myAudioP[i*4+2] = Math.sin(a)*2;
+                myAudioP[i*4+3] = 0;
+            }
+            //headphones
+            if(hey!=0){
+                myAudioP[(cin+0)*4+0] =-22;
+                myAudioP[(cin+0)*4+1] = -.07;
+                myAudioP[(cin+0)*4+2] = -.05;
+                myAudioP[(cin+0)*4+3] = 1;
+                myAudioP[(cin+1)*4+0] = 22;
+                myAudioP[(cin+1)*4+1] = -.07;
+                myAudioP[(cin+1)*4+2] = -.1;
+                myAudioP[(cin+1)*4+3] = 1;
+            }
+            //loopTimes = myAudioM*cin;
+            sndTR  = myAudioM*myAudioN |0;
+            sndTR2 = myAudioM*myAudioN * (sQx.sampleRate/sndR) |0;
+        };
+        
+        mouC = 0;                   //mouse clicks bit on
+        mouD = new Float32Array(2); //mouse movement
+        mouseDown  = function(e)
+        {
+            if(!(document.pointerLockElement === canvas)){return;}
+            if(e.button==0){mouC = mouC|(1<<0);               }
+            if(e.button==1){mouC = mouC|(1<<1); loopTimes = 0;}
+            if(e.button==2){mouC = mouC|(1<<2);               }
+        };
+        mouseUp    = function(e)
+        {
+            canvas.requestPointerLock();
+            canvas.focus();
+            if(e.button==0){mouC = mouC & (~(1<<0));}
+            if(e.button==1){mouC = mouC & (~(1<<1));}
+            if(e.button==2){mouC = mouC & (~(1<<2));}
+        };
+        mouseUp2   = function(e){iniAudio();};
+        mouseMove  = function(e)
+        {
+            if(!(document.pointerLockElement === canvas)){return;}
+            mouD[0] += e.movementX;
+            mouD[1] += e.movementY;
+        };
+        mouseWheel = function(e)
+        {
+            //e.preventDefault();
+            //if(e.deltaY>0){brs*=1/1.25;}
+            //if(e.deltaY<0){brs*=  1.25;}
+            if(e.deltaY>0){cam[7]*=1/1.25;}
+            if(e.deltaY<0){cam[7]*=  1.25;}
+        };
+        keysB = 0; //bit on for key pressed
+        keyDown = function(e)
+        {
+            if(!(document.pointerLockElement === canvas)){return;}
+            //e.preventDefault();
+            switch(e.code)
+            {
+                case "KeyQ": keysB = keysB|(1<<0); break;
+                case "KeyW": keysB = keysB|(1<<1); break;
+                case "KeyE": keysB = keysB|(1<<2); break;
+                case "KeyA": keysB = keysB|(1<<3); break;
+                case "KeyS": keysB = keysB|(1<<4); break;
+                case "KeyD": keysB = keysB|(1<<5); break;
+                case "KeyZ": brs*=  2; break;
+                case "KeyX": brs*=1/2; break;
+                case "Digit1": loopTimes = myAudioM*1; break;
+                case "Digit2": loopTimes = myAudioM*2; break;
+                case "Digit3": loopTimes = myAudioM*3; break;
+                case "Digit4": loopTimes = myAudioM*4; break;
+                case "Digit5": loopTimes = myAudioM*5; break;
+                case "Digit6": loopTimes = myAudioM*6; break;
+                case "Digit7": loopTimes = myAudioM*7; break;
+                case "Digit8": loopTimes = myAudioM*8; break;
+                case "Digit9": loopTimes = myAudioM*9; break;
+                case "Digit0": loopTimes = myAudioM*10; break;
+            }
+        };
+        keyUp   = function(e)
+        {
+            //e.preventDefault();
+            switch(e.code)
+            {
+                case "KeyQ": keysB = keysB & (~(1<<0)); break;
+                case "KeyW": keysB = keysB & (~(1<<1)); break;
+                case "KeyE": keysB = keysB & (~(1<<2)); break;
+                case "KeyA": keysB = keysB & (~(1<<3)); break;
+                case "KeyS": keysB = keysB & (~(1<<4)); break;
+                case "KeyD": keysB = keysB & (~(1<<5)); break;
+            }
+        };
+        canvas.addEventListener("mousedown",  mouseDown, true);
+        canvas.addEventListener("mousemove",  mouseMove, true);
+        canvas.addEventListener("mouseup"  ,  mouseUp  , true);
+        document.addEventListener("mouseup",  mouseUp2 , true);
+        document.addEventListener(  "wheel", mouseWheel, true);
+        document.addEventListener("keydown",    keyDown, true);
+        document.addEventListener("keyup"  ,    keyUp  , true);
+        document.addEventListener("contextmenu", event => event.preventDefault(), true);
+
+        butPlay = document.createElement("button");
+        butPlay.style.position = "absolute";
+        butPlay.style.top      =   "0px";
+        butPlay.style.left     = "300px";
+        butPlay.style.width    = "100px";
+        butPlay.innerHTML      = "play";
+        butPlay.onclick        = audioPlay;
+        document.body.appendChild(butPlay);
+
+        butSave = document.createElement("button");
+        butSave.style.position = "absolute";
+        butSave.style.top      =   "0px";
+        butSave.style.left     = "400px";
+        butSave.style.width    = "100px";
+        butSave.innerHTML      = "save";
+        butSave.onclick        = saveWAV;
+        document.body.appendChild(butSave);
+        if(true){
+            let mymin   = [-1,0];
+            let mymax   = [ 1,4];
+            let myvalue = [ 0,1];
+            contrastZ = 2;
+            contrastValues  = new Float32Array(contrastZ);
+            contrastSliders = new Array(contrastZ);
+            for(let i = 0; i < contrastZ; i++)
+            {
+                contrastValues[i] = myvalue[i];
+                contrastSliders[i] = document.createElement("input");
+                contrastSliders[i].style.position = "absolute";
+                contrastSliders[i].style.top   = i*22+"px";
+                contrastSliders[i].style.left  = "512px";
+                contrastSliders[i].style.width = "512px";
+                contrastSliders[i].type    = "range";
+                contrastSliders[i].min     = 0|(1024*mymin  [i]);
+                contrastSliders[i].max     = 0|(1024*mymax  [i]);
+                contrastSliders[i].value   = 0|(1024*myvalue[i]);
+                contrastSliders[i].step    = 1;
+                contrastSliders[i].oninput = function(e){contrastValues[i] = contrastSliders[i].value/1024;};
+                document.body.appendChild(contrastSliders[i]);
+            }
+        }
+        rngMe = new Array(rngMv.length);//3pos 1zoom
+        for(let i = 0; i < rngMe.length; i++)
+        {
+            rngMe[i] = document.createElement("input");
+            rngMe[i].style.position = "absolute";
+            rngMe[i].style.top   = 32+i*22+"px";
+            rngMe[i].style.left  = "0px";
+            rngMe[i].style.width = "512px";
+            rngMe[i].type    = "range";
+            rngMe[i].min     =-gameZ;
+            rngMe[i].max     = gameZ;
+            rngMe[i].value   = rngMv[i];
+            rngMe[i].step    = 1;
+            rngMe[i].oninput = function(e){
+                let m = 1;  if(i==3){m = 1/1024;}
+                rngMv[i] = rngMe[i].value * m;
+                gpuMRI();
+            };
+            document.body.appendChild(rngMe[i]);
+        }
+        rngMe[3].min     = 0|(1024*0);
+        rngMe[3].max     = 0|(1024*4);
+        rngMe[3].value   = 0|(1024*rngMv[3]);
+        if(true){
+            flipBoxesZ = 3;
+            flipValues = new Float32Array(flipBoxesZ);
+            flipBoxes  = new Array(flipBoxesZ);
+            for(let i = 0; i < flipBoxesZ; i++)
+            {
+                flipBoxes[i] = document.createElement("input");
+                flipBoxes[i].style.position = "absolute";
+                flipBoxes[i].style.top   = 32+4*22+i*22+"px";
+                flipBoxes[i].style.left  = "0px";
+                flipBoxes[i].type    = "checkbox";
+                flipBoxes[i].value   = "flip";
+                flipBoxes[i].checked = false;
+                flipBoxes[i].oninput = function(e){flipValues[i] = flipBoxes[i].checked*1; gpuMRI();};
+                document.body.appendChild(flipBoxes[i]);
+            }
+        }
+        
+
+        //html to visualize wave
+        canvas2 = document.createElement("canvas");
+        canvas2.style.position = "absolute";
+        canvas2.style.bottom   = "0px";
+        canvas2.style.left     = "0px";
+        document.body.appendChild(canvas2);
+        visualwav = function()
+        {
+            let sh = sndD.length/sndCh |0;
+
+            c2dw = Math.min(8192,sh);
+            c2dh = 256+128;
+            canvas2.style.width  = c2dw+"px";
+            canvas2.style.height = c2dh+"px";
+            canvas2.width  = c2dw;
+            canvas2.height = c2dh;
+
+            let ctx = canvas2.getContext("2d");
+
+            ctx.globalCompositeOperation = "source-over";
+
+            ctx.beginPath();
+            ctx.fillStyle = "#000000";
+            ctx.fillRect(0, 0, c2dw, c2dh);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.lineWidth = 1;
+            ctx.globalCompositeOperation = "lighter";
+            let cols = ["rgba(0,255,0,.5)",
+                        "rgba(0,0,255,.5)"];
+            let hm = c2dh/2 |0;
+            for(let ch = 0; ch < sndCh; ch++)
+            {
+                ctx.strokeStyle = cols[ch];
+                for(let i = 0; i < c2dw; i++)
+                {
+                    let h = sndD[ch*sh + i];
+                        h = h*hm |0;
+                    ctx.beginPath();
+                    ctx.moveTo(i+.5, hm    );
+                    ctx.lineTo(i+.5, hm + h);
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+            }
+        };
+    };
+    timS      = 0;
+    timP      = 0;
+    loopTimes = 0;
+    render = function()
+    {
+        let pm   = performance.now();
+        let timD = (pm-timP)*.001;
+        timP = pm;
+        let udaf = new Float32Array(uda);
+        let udau = new  Uint32Array(uda);
+        //camera
+        {
+            let fb = (((keysB&(1<<1))!=0)*1 - ((keysB&(1<<4))!=0)*1)*timD*cam[7];
+            let lr = (((keysB&(1<<3))!=0)*1 - ((keysB&(1<<5))!=0)*1)*timD*cam[7];
+            let ud = (((keysB&(1<<2))!=0)*1 - ((keysB&(1<<0))!=0)*1)*timD*cam[7];
+            if(fb!=0)
+            {
+                cam[3] += cam[0]*fb;
+                cam[4] += cam[1]*fb;
+                cam[5] += cam[2]*fb;
+            }
+            if(lr!=0)
+            {
+                lr *= 1/Math.sqrt(cam[0]*cam[0] + cam[2]*cam[2]);
+                cam[3] -= cam[2]*lr;
+                cam[5] += cam[0]*lr;
+            }
+            if(ud!=0)
+            {
+                let a = 1/Math.sqrt(cam[0]*cam[0] + cam[2]*cam[2]);
+                let crv0 = - cam[2]*a;
+                let crv2 = + cam[0]*a;
+                let cup0 =-crv2*cam[1];
+                let cup1 = crv2*cam[0] - crv0*cam[2];
+                let cup2 = crv0*cam[1];
+                cam[3] += cup0*ud;
+                cam[4] += cup1*ud;
+                cam[5] += cup2*ud;
+            }
+            //camRotate
+            let m = cam[6]/Math.min(window.screen.height, window.screen.width);
+            let kyX = mouD[0]*m;  mouD[0] = 0;
+            let kyY = mouD[1]*m;  mouD[1] = 0;
+            let upv0 = 0;
+            let upv1 = 1;
+            let upv2 = 0;
+            //rotate mouseX
+            let r1 = Math.cos(kyX);
+            let r2 = Math.sin(kyX);
+            let crv0 = upv1*cam[2] - upv2*cam[1];
+            let crv1 = upv2*cam[0] - upv0*cam[2];
+            let crv2 = upv0*cam[1] - upv1*cam[0];
+            let crv3 = (upv0*cam[0] + upv1*cam[1] + upv2*cam[2])*(1-r1);
+            cam[0] = cam[0]*r1 + crv0*r2 + upv0*crv3;
+            cam[1] = cam[1]*r1 + crv1*r2 + upv1*crv3;
+            cam[2] = cam[2]*r1 + crv2*r2 + upv2*crv3;
+            //rotate mouseY
+            let r3 = Math.asin(upv0*cam[0] + upv1*cam[1] + upv2*cam[2]) - kyY;
+            if(r3 >  Math.PI*.49 ||
+               r3 < -Math.PI*.49 ){kyY = 0;}
+                r1 = Math.cos(kyY);
+                r2 = Math.sin(kyY);
+                crv0 = upv1*cam[2] - upv2*cam[1];
+                crv1 = upv2*cam[0] - upv0*cam[2];
+                crv2 = upv0*cam[1] - upv1*cam[0];
+            let cup0 = crv1*cam[2] - crv2*cam[1];
+            let cup1 = crv2*cam[0] - crv0*cam[2];
+            let cup2 = crv0*cam[1] - crv1*cam[0];
+            let llll = 1/Math.sqrt(cup0*cup0 + cup1*cup1 + cup2*cup2);
+                cup0 *= llll;
+                cup1 *= llll;
+                cup2 *= llll;
+            cam[0] = cam[0]*r1 + cup0*r2;
+            cam[1] = cam[1]*r1 + cup1*r2;
+            cam[2] = cam[2]*r1 + cup2*r2;
+
+            udaf[2+0] = cam[3];
+            udaf[2+1] = cam[4];
+            udaf[2+2] = cam[5];
+            udaf[2+3] = cam[0];
+            udaf[2+4] = cam[1];
+            udaf[2+5] = cam[2];
+        }
+
+        //physics
+        view = context.getCurrentTexture().createView();
+        bindGroup = [device.createBindGroup({
+                           layout: bindGroupLayout0,
+                           entries: [
+                               { binding: 0, resource: { buffer: uniBuffer } },
+                               { binding: 1, resource: { buffer: bufferD0  } },
+                               { binding: 2, resource: { buffer: bufferD1  } },
+                               { binding: 3, resource: { buffer: bufferD2  } },
+                               { binding: 4, resource: { buffer: bufferSDO } },
+                               { binding: 5, resource: { buffer: buffer1   } },
+                               { binding: 6, resource: { buffer: bufferMRI } },
+                               { binding: 7, resource: view                  },
+                           ],
+                     }),
+                     device.createBindGroup({
+                         layout: bindGroupLayout0,
+                         entries: [
+                             { binding: 0, resource: { buffer: uniBuffer } },
+                             { binding: 1, resource: { buffer: bufferD2  } },
+                             { binding: 2, resource: { buffer: bufferD0  } },
+                             { binding: 3, resource: { buffer: bufferD1  } },
+                             { binding: 4, resource: { buffer: bufferSDO } },
+                             { binding: 5, resource: { buffer: buffer1   } },
+                             { binding: 6, resource: { buffer: bufferMRI } },
+                             { binding: 7, resource: view                  },
+                         ],
+                     }),
+                     device.createBindGroup({
+                         layout: bindGroupLayout0,
+                         entries: [
+                             { binding: 0, resource: { buffer: uniBuffer } },
+                             { binding: 1, resource: { buffer: bufferD1  } },
+                             { binding: 2, resource: { buffer: bufferD2  } },
+                             { binding: 3, resource: { buffer: bufferD0  } },
+                             { binding: 4, resource: { buffer: bufferSDO } },
+                             { binding: 5, resource: { buffer: buffer1   } },
+                             { binding: 6, resource: { buffer: bufferMRI } },
+                             { binding: 7, resource: view                  },
+                         ],
+                     }),
+                   ];
+        for(let i=0; i<loops && loopTimes<sndTR; i++)
+        {
+            let bg = loopTimes%3;
+            let md = (loopTimes%myAudioM)|0;
+            let dv = (loopTimes/myAudioM)|0;
+            udau[ 0] = loopTimes;
+            if(md==0){
+            udaf[ 9] = myAudioP[dv*4+3];
+            udaf[10] = myAudioP[dv*4+0];
+            udaf[11] = myAudioP[dv*4+1];
+            udaf[12] = myAudioP[dv*4+2];}
+            device.queue.writeBuffer(uniBuffer, 0, uda);
+            //set
+            if(md==0){
+                commandEncoder = device.createCommandEncoder();
+                passEncoderCompute = commandEncoder.beginComputePass();
+                passEncoderCompute.setPipeline(computePipeline2);
+                passEncoderCompute.setBindGroup(0, bindGroup[bg]);
+                passEncoderCompute.dispatchWorkgroups(gameZ/cThrds,gameZ,gameZ);
+                passEncoderCompute.end();
+                device.queue.submit([commandEncoder.finish()]);
+            }
+            //sim
+            commandEncoder = device.createCommandEncoder();
+            passEncoderCompute = commandEncoder.beginComputePass();
+            passEncoderCompute.setPipeline(computePipeline0);
+            passEncoderCompute.setBindGroup(0, bindGroup[bg]);
+            passEncoderCompute.dispatchWorkgroups(gameZ/cThrds,gameZ,gameZ);
+            passEncoderCompute.end();
+            device.queue.submit([commandEncoder.finish()]);
+            //walls(no more), now used to just save sound
+            commandEncoder = device.createCommandEncoder();
+            passEncoderCompute = commandEncoder.beginComputePass();
+            passEncoderCompute.setPipeline(computePipeline1);
+            passEncoderCompute.setBindGroup(0, bindGroup[bg]);
+            passEncoderCompute.dispatchWorkgroups(1,1,1);
+            passEncoderCompute.end();
+            device.queue.submit([commandEncoder.finish()]);
+            //step
+            if(loopTimes==sndTR-1)
+            {
+                //downsample using fourier transform
+                commandEncoder = device.createCommandEncoder();
+                passEncoderCompute = commandEncoder.beginComputePass();
+                passEncoderCompute.setPipeline(computePipelineFT);
+                passEncoderCompute.setBindGroup(0, bindGroup[bg]);
+                passEncoderCompute.dispatchWorkgroups(Math.ceil(sndTR2/cThrds2),2,1);
+                passEncoderCompute.end();
+                device.queue.submit([commandEncoder.finish()]);
+                //pass GPU to CPU
+                commandEncoder = device.createCommandEncoder();
+                commandEncoder.copyBufferToBuffer(bufferSDO, sndTR*sndCh*4, buffer2, 0, buffer2.size);
+                device.queue.submit([commandEncoder.finish()]);
+                buffer2.mapAsync(GPUMapMode.READ).then(readBuff);
+                console.log("minutes "+(performance.now()-timS)/1000/60);
+            }
+            ++loopTimes;
+        }
+        let bg = loopTimes%3;
+        //brush
+        if((mouC&(1<<0))!=0 ||(mouC&(1<<2))!=0)
+        {
+            udaf[8] = mouC;
+            udaf[9] = brs;
+            device.queue.writeBuffer(uniBuffer, 0, uda);
+
+            let commandEncoder = device.createCommandEncoder();
+            passEncoderCompute = commandEncoder.beginComputePass();
+            passEncoderCompute.setPipeline(computePipelineBRUSH);
+            passEncoderCompute.setBindGroup(0, bindGroup[bg]);
+            passEncoderCompute.dispatchWorkgroups(gameZ/cThrds,gameZ,gameZ);
+            passEncoderCompute.end();
+            device.queue.submit([commandEncoder.finish()]);
+        }
+        //canvas
+        if(loops<=1)
+        {
+            udaf[14] = contrastValues[0];
+            udaf[15] = contrastValues[1];
+            device.queue.writeBuffer(uniBuffer, 0, uda);
+
+            commandEncoder = device.createCommandEncoder();
+            passEncoderCompute = commandEncoder.beginComputePass();
+            passEncoderCompute.setPipeline(computePipelineR);
+            passEncoderCompute.setBindGroup(0, bindGroup[bg]);
+            passEncoderCompute.dispatchWorkgroups(screnX/cThrds|0,screnY,1);
+            passEncoderCompute.end();
+            device.queue.submit([commandEncoder.finish()]);
+        }
+        requestAnimationFrame(render);
+    };
+    function gma(t)
+    {
+        
+        //linear interpolation
+        //let fl = Math.floor(t);
+        //let fr = t-fl;
+        //let v1 = myAudio[Math.min(fl+0,myAudio.length-1)];
+        //let v2 = myAudio[Math.min(fl+1,myAudio.length-1)];
+        //return +v1*(1-fr)
+        //       +v2*   fr;
+        //lanczos interpolation
+        let fl = Math.floor(t);
+        let fr = t-fl;
+        if(fr==0){return myAudio[fl];}
+        let z = 12; //kernel size
+        let d = 1/z;
+        let s = 0;
+        for(let i=-z; i<=z; i++)
+        {
+            let r = fl+i;
+            if(r<              0){continue;}
+            if(r>=myAudio.length){continue;}
+            let x = (fr-i)*Math.PI;
+            s += Math.sin(x)*Math.sin(x*d)*z/(x*x)*myAudio[r];
+        }
+        return s;
+    }
+
+    //save wav file
+    function floatTo16BitPCM(output, offset, input)
+    {
+        for (let i = 0; i < input.length; i++, offset += 2)
+        {
+            let s = Math.max(-1, Math.min(1, input[i]));
+            output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        }
+    }
+    function writeString(view, offset, string)
+    {
+        for (let i = 0; i < string.length; i++)
+        {
+            view.setUint8(offset + i, string.charCodeAt(i));
+        }
+    }
+    function saveWAV()
+    {
+        let bps = 4;                    //bytes per sample
+        let dsz = sndTR2*sndCh*bps;     //data size
+        let buffer = new ArrayBuffer(46 + dsz);
+        let view = new DataView(buffer);
+        writeString(view, 0, 'RIFF');
+        view.setUint32(4, 38 + dsz, true);
+        writeString(view, 8, 'WAVE');
+        writeString(view, 12, 'fmt ');
+        view.setUint32(16, 18, true);
+        view.setUint16(20, 3, true);
+        view.setUint16(22, sndCh, true);
+        view.setUint32(24, sQx.sampleRate, true);
+        view.setUint32(28, sQx.sampleRate * sndCh * bps, true);
+        view.setUint16(32,                  sndCh * bps, true);
+        view.setUint16(34, bps*8, true);
+        view.setUint16(36, 0, true);
+        writeString(view, 38, 'data');
+        view.setUint32(42, dsz, true);
+        let w = 46;
+        for(let j = 0; j < sndTR2; ++j){view.setFloat32(w, sndD[0*sndTR2+j], true);  w+=bps;
+                                        view.setFloat32(w, sndD[1*sndTR2+j], true);  w+=bps;}
+        let blob = new Blob([view], {type: 'audio/wav'});
+        let link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
+        link.download = '3Dsound';
+        link.click();
+    }
+    function getHead(buf)
+    {
+        let d1 = new Float32Array(buf);
+        let d2 = new Float32Array(d1.length/4);
+        for(let i=0; i<d2.length; i++)
+        {
+            d2[i] = (d1[i*4+3]>6)*1;
+        }
+        let b = device.createBuffer({
+            size: gameZ*gameZ*gameZ*4,
+            usage: GPUBufferUsage.STORAGE,
+            mappedAtCreation: true,
+        });
+        new Float32Array(b.getMappedRange()).set(d2);
+        b.unmap();
+        buffer1.destroy();
+        buffer1 = b;
+    }
+    function getMRI(buf)
+    {
+        let u8       = new Uint8Array(buf);
+        let dataView = new DataView(buf);
+        let sizeof_hdr     = dataView.getInt32(0, true);
+        let dim_info       = u8[39];
+        let dim            = new Int16Array(buf,40,8);
+        let intent_p1      = dataView.getFloat32(56, true);
+        let intent_p2      = dataView.getFloat32(60, true);
+        let intent_p3      = dataView.getFloat32(64, true);
+        let intent_code    = dataView.getInt16(68, true);
+        let datatype       = dataView.getInt16(70, true);
+        let bitpix         = dataView.getInt16(72, true);
+        let slice_start    = dataView.getInt16(74, true);
+        let pixdim         = new Float32Array(buf,76,8);
+        let vox_offset     = dataView.getFloat32(108, true);
+        let scl_slope      = dataView.getFloat32(112, true);
+        let scl_inter      = dataView.getFloat32(116, true);
+        let slice_end      = dataView.getInt16(120, true);
+        let slice_code     = u8[122];
+        let xyzt_units     = u8[123];
+        let cal_max        = dataView.getFloat32(124, true);
+        let cal_min        = dataView.getFloat32(128, true);
+        let slice_duration = dataView.getFloat32(132, true);
+        let toffset        = dataView.getFloat32(136, true);
+        //let glmax          = dataView.getInt32(140, true);
+        //let glmin          = dataView.getInt32(144, true);
+        let descrip        = String.fromCharCode.apply(null, new Uint8Array(buf, 148, 80));
+        let aux_file       = String.fromCharCode.apply(null, new Uint8Array(buf, 228, 24));
+        let qform_code     = dataView.getInt16(252, true);
+        let sform_code     = dataView.getInt16(254, true);
+        let quatern_b      = dataView.getFloat32(256, true);
+        let quatern_c      = dataView.getFloat32(260, true);
+        let quatern_d      = dataView.getFloat32(264, true);
+        let qoffset_x      = dataView.getFloat32(268, true);
+        let qoffset_y      = dataView.getFloat32(272, true);
+        let qoffset_z      = dataView.getFloat32(276, true);
+        let srow_x         = new Float32Array(buf, 280, 4);
+        let srow_y         = new Float32Array(buf, 296, 4);
+        let srow_z         = new Float32Array(buf, 312, 4);
+        let intent_name    = String.fromCharCode.apply(null, new Uint8Array(buf, 328, 16));
+        let magic          = String.fromCharCode.apply(null, new Uint8Array(buf, 344, 4));
+        let d2 = null;
+        if(datatype==  2){d2 = new Uint8Array  (buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype==  4){d2 = new Int16Array  (buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype==  8){d2 = new Int32Array  (buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype== 16){d2 = new Float32Array(buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype== 64){d2 = new Float64Array(buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype==256){d2 = new Int8Array   (buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype==512){d2 = new Uint16Array (buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+        if(datatype==768){d2 = new Uint32Array (buf, vox_offset, dim[1]*dim[2]*dim[3]);}
+
+        loadDtoGPU(d2, dim[1],dim[2],dim[3], pixdim[1],pixdim[2],pixdim[3]);
+    }
+    function getDICOM()
+    {
+        let byteArrayO= new Uint8Array(dcmL[0]);
+        let optionsO  = { TransferSyntaxUID: '1.2.840.10008.1.2' };
+        let dataSetO  = dicomParser.parseDicom(byteArrayO, optionsO);
+        let pixelSpacing   = Number(dataSetO.floatString('x00280030'));
+        let sliceThickness = Number(dataSetO.floatString('x00180050'));
+        let io        = dataSetO.string('x00200037');//orientation
+        let ix        = dataSetO.uint16('x00280010');
+        let iy        = dataSetO.uint16('x00280011');
+        let iz        = dcmL.length;
+        let zm = Math.pow(2,32);
+        for(let i = 0; i < iz; i++)
+        {
+            let byteArray = new Uint8Array(dcmL[i]);
+            let options   = { TransferSyntaxUID: '1.2.840.10008.1.2' };
+            let dataSet   = dicomParser.parseDicom(byteArray, options);
+            let insn      = Number(dataSet.string('x00200013'));
+            zm = Math.min(zm,insn);
+        }
+        let d2 = new Float32Array(ix*iy*iz);
+        for(let i = 0; i < iz; i++)
+        {
+            let byteArray        = new Uint8Array(dcmL[i]);
+            let options          = { TransferSyntaxUID: '1.2.840.10008.1.2' };
+            let dataSet          = dicomParser.parseDicom(byteArray, options);
+            let windowCenter     = Number(dataSet.string('x00281050'));
+            let windowWidth      = Number(dataSet.string('x00281051'));
+            let rescaleSlope     = Number(dataSet.floatString('x00281053'));
+            let rescaleIntercept = Number(dataSet.floatString('x00281052'));
+            let bitsAllocated    = dataSet.uint16('x00280100', 0);
+            let bitsStored       = dataSet.uint16('x00280101', 0);
+            let ix2              = dataSet.uint16('x00280010');
+            let iy2              = dataSet.uint16('x00280011');
+            let insn             = dataSet.string('x00200013');
+            let z                = Number(insn)-zm;
+            let pixelDataElement = dataSet.elements.x7fe00010;
+            let b1 = bitsAllocated ==  8;// && bitsStored ==  8;
+            let b2 = bitsAllocated == 16;// && bitsStored == 16;
+            let pixelData = null;
+            if(b1){pixelData = new Uint8Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length    );}
+            if(b2){pixelData = new Int16Array(dataSet.byteArray.buffer, pixelDataElement.dataOffset, pixelDataElement.length / 2);}
+            let w = z*ix*iy;
+            let lo = windowCenter - windowWidth / 2;
+            for(let j = 0; j < pixelData.length; j++){
+                let p = pixelData[j];
+                //if(rescaleSlope==rescaleSlope && rescaleIntercept==rescaleIntercept){p = p*rescaleSlope + rescaleIntercept;}
+                //if(windowCenter==windowCenter && windowWidth     ==windowWidth     ){p = (p-lo)/windowWidth;}
+                //else{p = 0;}
+                //if(p<0){p = 0;}
+                //if(p>1){p = 1;}
+                //    p = p-windowCenter;
+                //if(p<0          ){p = 0;}
+                //if(p>555){p = 0;}
+                d2[w] = p;  w++;
+            }
+        }
+        loadDtoGPU(d2, ix,iy,iz, pixelSpacing,pixelSpacing,sliceThickness);
+    }
+    function getNRRD(buf)
+    {
+        //// Convert the buffer into a string
+        //let decoder = new TextDecoder("utf-8");
+        //let str = decoder.decode(buf);
+        //// Split the header from the data
+        //let splitIndex = str.indexOf("\n\n");
+        //let headerStr = str.substring(0, splitIndex);
+        //let dataStr = str.substring(splitIndex + 2);
+        //// Split the header into lines
+        //let headerLines = headerStr.split("\n");
+        //// Parse the 'sizes' field from the header
+        //let sizesLine = headerLines.find(line => line.startsWith("sizes:"));
+        //let sizes = sizesLine.split(":")[1].trim().split(" ").map(Number);
+        //// Convert the data into a Uint8Array
+        //let data = new Uint8Array(dataStr.length);
+        //for (let i = 0; i < dataStr.length; i++) {
+        //    data[i] = dataStr.charCodeAt(i);
+        //}
+        //// Reshape the data into a 3D array
+        //let array = new Array(sizes[0]);
+        //for (let x = 0; x < sizes[0]; x++){ array[x] = new Array(sizes[1]);
+        //for (let y = 0; y < sizes[1]; y++){ array[x][y] = new Array(sizes[2]);
+        //for (let z = 0; z < sizes[2]; z++){ array[x][y][z] = data[x * sizes[1] * sizes[2] + y * sizes[2] + z];
+        //}}}
+        //return array;
+
+        let myNrrd = nrrdjs.parse(buf, {});
+        let d2 = myNrrd.data;
+        let ix = myNrrd.header.sizes[0];
+        let iy = myNrrd.header.sizes[1];
+        let iz = myNrrd.header.sizes[2];
+        let gx = Math.abs(myNrrd.header["space directions"][0][0]);
+        let gy = Math.abs(myNrrd.header["space directions"][1][1]);
+        let gz = Math.abs(myNrrd.header["space directions"][2][2]);
+        loadDtoGPU(d2, ix,iy,iz, gx,gy,gz);
+    }
+    function loadDtoGPU(d2, ix,iy,iz, gx,gy,gz)
+    {
+        let miv = Math.pow(2,32);
+        let mav =-Math.pow(2,32);
+        let d = new Float32Array(ix*iy*iz);
+        for(let i = 0; i < d2.length; i++){
+            let a = d2[i];
+            d[i] = a;
+            miv = Math.min(miv,a);
+            mav = Math.max(mav,a);
+        }
+        //for(let i = 0; i < 24; i++){
+        //    let r = (i+190) + (i+190)*iy + (158)*ix*iy;
+        //    console.log((d[r]-miv)/(mav-miv));
+        //    d[r] = mav; 
+        //}
+        vrsMRI = new Float32Array(8); let w = 0;
+        vrsMRI[w] = miv;    w++;
+        vrsMRI[w] = mav;    w++;
+        vrsMRI[w] = ix ;    w++;//axis slices
+        vrsMRI[w] = iy ;    w++;
+        vrsMRI[w] = iz ;    w++;
+        vrsMRI[w] = gx ;    w++;//axis slice thichness
+        vrsMRI[w] = gy ;    w++;
+        vrsMRI[w] = gz ;    w++;
+
+        let b = device.createBuffer({
+            size: ix*iy*iz*4,
+            usage: GPUBufferUsage.STORAGE,
+            mappedAtCreation: true,
+        });
+        new Float32Array(b.getMappedRange()).set(d);
+        b.unmap();
+        bufferMRI.destroy();
+        bufferMRI = b;
+        gpuMRI();
+
+        loopTimes = 0;
+    }
+    function gpuMRI()
+    {
+        view = context.getCurrentTexture().createView();
+        bindGroup0 = device.createBindGroup({
+            layout: bindGroupLayout0,
+            entries: [
+                { binding: 0, resource: { buffer: uniBuffer } },
+                { binding: 1, resource: { buffer: bufferD0  } },
+                { binding: 2, resource: { buffer: bufferD1  } },
+                { binding: 3, resource: { buffer: bufferD2  } },
+                { binding: 4, resource: { buffer: bufferSDO } },
+                { binding: 5, resource: { buffer: buffer1   } },
+                { binding: 6, resource: { buffer: bufferMRI } },
+                { binding: 7, resource: view                  },
+            ],
+        });
+        let udaf = new Float32Array(uda);
+        let udau = new  Uint32Array(uda);
+        udaf[ 2] = vrsMRI[2];
+        udaf[ 3] = vrsMRI[3];
+        udaf[ 4] = vrsMRI[4];
+        udaf[ 5] = vrsMRI[5];
+        udaf[ 6] = vrsMRI[6];
+        udaf[ 7] = vrsMRI[7];
+        udaf[10] = rngMv[0];
+        udaf[11] = rngMv[1];
+        udaf[12] = rngMv[2];
+        udaf[13] = rngMv[3];
+        udaf[14] = vrsMRI[0];
+        udaf[15] = vrsMRI[1];
+        udaf[16] = flipValues[0];
+        udaf[17] = flipValues[1];
+        udaf[18] = flipValues[2];
+        device.queue.writeBuffer(uniBuffer, 0, uda);
+        //move mri to img by interpolation
+        commandEncoder = device.createCommandEncoder();
+        passEncoderCompute = commandEncoder.beginComputePass();
+        passEncoderCompute.setPipeline(computePipelineMRI1);
+        passEncoderCompute.setBindGroup(0, bindGroup0);
+        passEncoderCompute.dispatchWorkgroups(gameZ/cThrds,gameZ,gameZ);
+        passEncoderCompute.end();
+        device.queue.submit([commandEncoder.finish()]);
+        //compute img dampening
+        commandEncoder = device.createCommandEncoder();
+        passEncoderCompute = commandEncoder.beginComputePass();
+        passEncoderCompute.setPipeline(computePipelineMRI2);
+        passEncoderCompute.setBindGroup(0, bindGroup0);
+        passEncoderCompute.dispatchWorkgroups(gameZ/cThrds,gameZ,gameZ);
+        passEncoderCompute.end();
+        device.queue.submit([commandEncoder.finish()]);
+    }
+    function delFrq(data,dataL,dataO,fc)//delete frequencies in range -fc to fc
+    {
+        //data  has real numbers and no imaginary numbers
+        //dataL length of data
+        //dataO offset in data
+        //fc    must be integer
+        //a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x
+        let nrf = 1/dataL*Math.PI*2;
+        let f = new Float32Array((fc*2+1)*2);
+        //for(let frq = 0; frq <= fc; frq++)//add frequencies
+        //{
+        //    let s1 = Math.random(); if(s1<.5){s1-=1;}
+        //    let s2 = Math.random(); if(s2<.5){s2-=1;}
+        //    for(let j = 0; j < dataL; j++){data[dataO+j] += +s1*Math.cos(j*nrf*frq)
+        //                                                    +s2*Math.sin(j*nrf*frq);}
+        //}
+        for(let frq = -fc; frq <= fc; frq++)//get frequencies amount
+        {
+            let w = (frq+fc)*2;
+            for(let j = 0; j < dataL; j++){let d = data[dataO+j];
+                                           f[w+0] += Math.cos(-j*nrf*frq)*d;
+                                           f[w+1] += Math.sin(-j*nrf*frq)*d;}
+            f[w+0] /= dataL;
+            f[w+1] /= dataL;
+        }
+        for(let frq = -fc; frq <= fc; frq++)//remove frequencies
+        {
+            let w = (frq+fc)*2;
+            for(let j = 0; j < dataL; j++){data[dataO+j] -= +f[w+0]*Math.cos( j*nrf*frq)
+                                                            -f[w+1]*Math.sin( j*nrf*frq);}
+        }
+        //console.log(data);
+    }
+    function getMax(data,dataL,dataO)//get max value
+    {
+        let m = 0;
+        for(let i = 0; i < dataL; i++)
+        {
+            let d = data[dataO+i];
+                d = Math.abs(d);
+                m = Math.max(d,m);
+        }
+        console.log(m);
+    }
+    function mod(a,n){return a - (n * Math.floor(a/n));}
+    function lanczos(x,a)
+    {
+        if(x==0){return 1;}
+        let xp = Math.PI*x;
+        return a*Math.sin(xp)*Math.sin(xp/a)/(xp*xp);
+    }
+    
+    //DICOM library
+    /*! dicom-parser - 1.8.12 - 2023-02-20 | (c) 2017 Chris Hafey | https://github.com/cornerstonejs/dicomParser */
+    !function(e,t){"object"==typeof exports&&"object"==typeof module?module.exports=t(require("zlib")):"function"==typeof define&&define.amd?define("dicom-parser",["zlib"],t):"object"==typeof exports?exports["dicom-parser"]=t(require("zlib")):e.dicomParser=t(e.zlib)}(this,function(r){return a=[function(e,t){e.exports=r},function(e,t,s){"use strict";s.r(t),s.d(t,"isStringVr",function(){return d}),s.d(t,"isPrivateTag",function(){return f}),s.d(t,"parsePN",function(){return a}),s.d(t,"parseTM",function(){return n}),s.d(t,"parseDA",function(){return o}),s.d(t,"explicitElementToString",function(){return l}),s.d(t,"explicitDataSetToJS",function(){return u}),s.d(t,"createJPEGBasicOffsetTable",function(){return p}),s.d(t,"parseDicomDataSetExplicit",function(){return q}),s.d(t,"parseDicomDataSetImplicit",function(){return T}),s.d(t,"readFixedString",function(){return b}),s.d(t,"alloc",function(){return k}),s.d(t,"version",function(){return L}),s.d(t,"bigEndianByteArrayParser",function(){return N}),s.d(t,"ByteStream",function(){return J}),s.d(t,"sharedCopy",function(){return j}),s.d(t,"DataSet",function(){return w}),s.d(t,"findAndSetUNElementLength",function(){return y}),s.d(t,"findEndOfEncapsulatedElement",function(){return g}),s.d(t,"findItemDelimitationItemAndSetElementLength",function(){return x}),s.d(t,"littleEndianByteArrayParser",function(){return M}),s.d(t,"parseDicom",function(){return V}),s.d(t,"readDicomElementExplicit",function(){return B}),s.d(t,"readDicomElementImplicit",function(){return A}),s.d(t,"readEncapsulatedImageFrame",function(){return W}),s.d(t,"readEncapsulatedPixelData",function(){return K}),s.d(t,"readEncapsulatedPixelDataFromFragments",function(){return _}),s.d(t,"readPart10Header",function(){return G}),s.d(t,"readSequenceItemsExplicit",function(){return I}),s.d(t,"readSequenceItemsImplicit",function(){return F}),s.d(t,"readSequenceItem",function(){return S}),s.d(t,"readTag",function(){return h});var r={AE:!0,AS:!0,AT:!1,CS:!0,DA:!0,DS:!0,DT:!0,FL:!1,FD:!1,IS:!0,LO:!0,LT:!0,OB:!1,OD:!1,OF:!1,OW:!1,PN:!0,SH:!0,SL:!1,SQ:!1,SS:!1,ST:!0,TM:!0,UI:!0,UL:!1,UN:void 0,UR:!0,US:!1,UT:!0},d=function(e){return r[e]},f=function(e){e=parseInt(e[4],16);if(isNaN(e))throw"dicomParser.isPrivateTag: cannot parse last character of group";return e%2==1},a=function(e){if(void 0!==e){e=e.split("^");return{familyName:e[0],givenName:e[1],middleName:e[2],prefix:e[3],suffix:e[4]}}};function n(e,t){if(2<=e.length){var r=parseInt(e.substring(0,2),10),a=4<=e.length?parseInt(e.substring(2,4),10):void 0,n=6<=e.length?parseInt(e.substring(4,6),10):void 0,i=8<=e.length?e.substring(7,13):void 0,i=i?parseInt(i,10)*Math.pow(10,6-i.length):void 0;if(t&&(isNaN(r)||void 0!==a&&isNaN(a)||void 0!==n&&isNaN(n)||void 0!==i&&isNaN(i)||r<0||23<r||a&&(a<0||59<a)||n&&(n<0||59<n)||i&&(i<0||999999<i)))throw"invalid TM '".concat(e,"'");return{hours:r,minutes:a,seconds:n,fractionalSeconds:i}}if(t)throw"invalid TM '".concat(e,"'")}function i(e,t,r){return!isNaN(r)&&(0<t&&t<=12&&0<e&&e<=function(e,t){switch(e){case 2:return t%4==0&&t%100||t%400==0?29:28;case 9:case 4:case 6:case 11:return 30;default:return 31}}(t,r))}function o(e,t){if(e&&8===e.length){var r=parseInt(e.substring(0,4),10),a=parseInt(e.substring(4,6),10),n=parseInt(e.substring(6,8),10);if(t&&!0!==i(n,a,r))throw"invalid DA '".concat(e,"'");return{year:r,month:a,day:n}}if(t)throw"invalid DA '".concat(e,"'")}function l(n,e){if(void 0===n||void 0===e)throw"dicomParser.explicitElementToString: missing required parameters";if(void 0===e.vr)throw"dicomParser.explicitElementToString: cannot convert implicit element to string";var t,r=e.vr,i=e.tag;function a(e,t){for(var r="",a=0;a<e;a++)0!==a&&(r+="/"),r+=t.call(n,i,a).toString();return r}if(!0===d(r))t=n.string(i);else{if("AT"===r){var o=n.uint32(i);return void 0===o?void 0:"x".concat((o=o<0?4294967295+o+1:o).toString(16).toUpperCase())}"US"===r?t=a(e.length/2,n.uint16):"SS"===r?t=a(e.length/2,n.int16):"UL"===r?t=a(e.length/4,n.uint32):"SL"===r?t=a(e.length/4,n.int32):"FD"===r?t=a(e.length/8,n.double):"FL"===r&&(t=a(e.length/4,n.float))}return t}function u(e,t){if(void 0===e)throw"dicomParser.explicitDataSetToJS: missing required parameter dataSet";t=t||{omitPrivateAttibutes:!0,maxElementLength:128};var r,a={};for(r in e.elements){var n=e.elements[r];if(!0!==t.omitPrivateAttibutes||!f(r))if(n.items){for(var i=[],o=0;o<n.items.length;o++)i.push(u(n.items[o].dataSet,t));a[r]=i}else{var s=void 0;n.length<t.maxElementLength&&(s=l(e,n)),a[r]=void 0!==s?s:{dataOffset:n.dataOffset,length:n.length}}}return a}function c(e,t){return 255===e.byteArray[t]&&217===e.byteArray[t+1]}function m(e,t,r){for(var a,n,i=r;i<t.fragments.length;i++)if(a=e,n=i,n=t.fragments[n],!(!c(a,n.position+n.length-2)&&!c(a,n.position+n.length-3)))return i}function p(e,t,r){if(void 0===e)throw"dicomParser.createJPEGBasicOffsetTable: missing required parameter dataSet";if(void 0===t)throw"dicomParser.createJPEGBasicOffsetTable: missing required parameter pixelDataElement";if("x7fe00010"!==t.tag)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'pixelDataElement' refers to non pixel data tag (expected tag = x7fe00010'";if(!0!==t.encapsulatedPixelData)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(!0!==t.hadUndefinedLength)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(void 0===t.basicOffsetTable)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(void 0===t.fragments)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(t.fragments.length<=0)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(r&&r.length<=0)throw"dicomParser.createJPEGBasicOffsetTable: parameter 'fragments' must not be zero length";r=r||t.fragments;for(var a=[],n=0;;){a.push(t.fragments[n].offset);var i=m(e,t,n);if(void 0===i||i===t.fragments.length-1)return a;n=i+1}}function h(e){if(void 0===e)throw"dicomParser.readTag: missing required parameter 'byteStream'";var t=256*e.readUint16()*256,e=e.readUint16();return"x".concat("00000000".concat((t+e).toString(16)).substr(-8))}function g(e,t,r){if(void 0===e)throw"dicomParser.findEndOfEncapsulatedElement: missing required parameter 'byteStream'";if(void 0===t)throw"dicomParser.findEndOfEncapsulatedElement: missing required parameter 'element'";if(t.encapsulatedPixelData=!0,t.basicOffsetTable=[],t.fragments=[],"xfffee000"!==h(e))throw"dicomParser.findEndOfEncapsulatedElement: basic offset table not found";for(var a=e.readUint32()/4,n=0;n<a;n++){var i=e.readUint32();t.basicOffsetTable.push(i)}for(var o=e.position;e.position<e.byteArray.length;){var s=h(e),d=e.readUint32();if("xfffee0dd"===s)return e.seek(d),void(t.length=e.position-t.dataOffset);if("xfffee000"!==s)return r&&r.push("unexpected tag ".concat(s," while searching for end of pixel data element with undefined length")),d>e.byteArray.length-e.position&&(d=e.byteArray.length-e.position),t.fragments.push({offset:e.position-o-8,position:e.position,length:d}),e.seek(d),void(t.length=e.position-t.dataOffset);t.fragments.push({offset:e.position-o-8,position:e.position,length:d}),e.seek(d)}r&&r.push("pixel data element ".concat(t.tag," missing sequence delimiter tag xfffee0dd"))}function y(e,t){if(void 0===e)throw"dicomParser.findAndSetUNElementLength: missing required parameter 'byteStream'";for(var r=e.byteArray.length-8;e.position<=r;)if(65534===e.readUint16()){var a=e.readUint16();if(57565===a)return 0!==e.readUint32()&&e.warnings("encountered non zero length following item delimiter at position ".concat(e.position-4," while reading element of undefined length with tag ").concat(t.tag)),void(t.length=e.position-t.dataOffset)}t.length=e.byteArray.length-t.dataOffset,e.seek(e.byteArray.length-e.position)}function b(e,t,r){if(r<0)throw"dicomParser.readFixedString - length cannot be less than 0";if(t+r>e.length)throw"dicomParser.readFixedString: attempt to read past end of buffer";for(var a,n="",i=0;i<r;i++){if(0===(a=e[t+i]))return t+=r,n;n+=String.fromCharCode(a)}return n}function v(e,t){for(var r=0;r<t.length;r++){var a=t[r];a.enumerable=a.enumerable||!1,a.configurable=!0,"value"in a&&(a.writable=!0),Object.defineProperty(e,a.key,a)}}function P(e,t){return void 0!==e.parser?e.parser:t}var w=function(){function a(e,t,r){!function(e,t){if(!(e instanceof t))throw new TypeError("Cannot call a class as a function")}(this,a),this.byteArrayParser=e,this.byteArray=t,this.elements=r}var e,t,r;return e=a,(t=[{key:"uint16",value:function(e,t){e=this.elements[e];if(t=void 0!==t?t:0,e&&0!==e.length)return P(e,this.byteArrayParser).readUint16(this.byteArray,e.dataOffset+2*t)}},{key:"int16",value:function(e,t){e=this.elements[e];if(t=void 0!==t?t:0,e&&0!==e.length)return P(e,this.byteArrayParser).readInt16(this.byteArray,e.dataOffset+2*t)}},{key:"uint32",value:function(e,t){e=this.elements[e];if(t=void 0!==t?t:0,e&&0!==e.length)return P(e,this.byteArrayParser).readUint32(this.byteArray,e.dataOffset+4*t)}},{key:"int32",value:function(e,t){e=this.elements[e];if(t=void 0!==t?t:0,e&&0!==e.length)return P(e,this.byteArrayParser).readInt32(this.byteArray,e.dataOffset+4*t)}},{key:"float",value:function(e,t){e=this.elements[e];if(t=void 0!==t?t:0,e&&0!==e.length)return P(e,this.byteArrayParser).readFloat(this.byteArray,e.dataOffset+4*t)}},{key:"double",value:function(e,t){e=this.elements[e];if(t=void 0!==t?t:0,e&&0!==e.length)return P(e,this.byteArrayParser).readDouble(this.byteArray,e.dataOffset+8*t)}},{key:"numStringValues",value:function(e){e=this.elements[e];if(e&&0<e.length){e=b(this.byteArray,e.dataOffset,e.length).match(/\\/g);return null===e?1:e.length+1}}},{key:"string",value:function(e,t){e=this.elements[e];if(e&&e.Value)return e.Value;if(e&&0<e.length){e=b(this.byteArray,e.dataOffset,e.length);return 0<=t?e.split("\\")[t].trim():e.trim()}}},{key:"text",value:function(e,t){e=this.elements[e];if(e&&0<e.length){e=b(this.byteArray,e.dataOffset,e.length);return 0<=t?e.split("\\")[t].replace(/ +$/,""):e.replace(/ +$/,"")}}},{key:"floatString",value:function(e,t){var r=this.elements[e];if(r&&0<r.length){t=this.string(e,t=void 0!==t?t:0);if(void 0!==t)return parseFloat(t)}}},{key:"intString",value:function(e,t){var r=this.elements[e];if(r&&0<r.length){t=this.string(e,t=void 0!==t?t:0);if(void 0!==t)return parseInt(t)}}},{key:"attributeTag",value:function(e){var t=this.elements[e];if(t&&4===t.length){var r=P(t,this.byteArrayParser).readUint16,e=this.byteArray,t=t.dataOffset;return"x".concat("00000000".concat((256*r(e,t)*256+r(e,t+2)).toString(16)).substr(-8))}}}])&&v(e.prototype,t),r&&v(e,r),Object.defineProperty(e,"prototype",{writable:!1}),a}();function x(e,t){if(void 0===e)throw"dicomParser.readDicomElementImplicit: missing required parameter 'byteStream'";for(var r=e.byteArray.length-8;e.position<=r;)if(65534===e.readUint16()){var a=e.readUint16();if(57357===a)return 0!==e.readUint32()&&e.warnings("encountered non zero length following item delimiter at position ".concat(e.position-4," while reading element of undefined length with tag ").concat(t.tag)),void(t.length=e.position-t.dataOffset)}t.length=e.byteArray.length-t.dataOffset,e.seek(e.byteArray.length-e.position)}var E=function(e,t){if(void 0!==e.vr)return"SQ"===e.vr;if(t.position+4<=t.byteArray.length){e=h(t);return t.seek(-4),"xfffee000"===e||"xfffee0dd"===e}return t.warnings.push("eof encountered before finding sequence item tag or sequence delimiter tag in peeking to determine VR"),!1};function A(e,t,r){if(void 0===e)throw"dicomParser.readDicomElementImplicit: missing required parameter 'byteStream'";var a=h(e),a={tag:a,vr:void 0!==r?r(a):void 0,length:e.readUint32(),dataOffset:e.position};return 4294967295===a.length&&(a.hadUndefinedLength=!0),a.tag===t||(!E(a,e)||f(a.tag)&&!a.hadUndefinedLength?a.hadUndefinedLength?x(e,a):e.seek(a.length):(F(e,a,r),f(a.tag)&&(a.items=void 0))),a}function S(e){if(void 0===e)throw"dicomParser.readSequenceItem: missing required parameter 'byteStream'";var t={tag:h(e),length:e.readUint32(),dataOffset:e.position};if("xfffee000"!==t.tag)throw"dicomParser.readSequenceItem: item tag (FFFE,E000) not found at offset ".concat(e.position);return t}function D(e,t){var r=S(e);return 4294967295===r.length?(r.hadUndefinedLength=!0,r.dataSet=function(e,t){for(var r={};e.position<e.byteArray.length;){var a=A(e,void 0,t);if("xfffee00d"===(r[a.tag]=a).tag)return new w(e.byteArrayParser,e.byteArray,r)}return e.warnings.push("eof encountered before finding sequence item delimiter in sequence item of undefined length"),new w(e.byteArrayParser,e.byteArray,r)}(e,t),r.length=e.position-r.dataOffset):(r.dataSet=new w(e.byteArrayParser,e.byteArray,{}),T(r.dataSet,e,e.position+r.length,{vrCallback:t})),r}function F(e,t,r){if(void 0===e)throw"dicomParser.readSequenceItemsImplicit: missing required parameter 'byteStream'";if(void 0===t)throw"dicomParser.readSequenceItemsImplicit: missing required parameter 'element'";t.items=[],(4294967295===t.length?function(e,t,r){for(;e.position+4<=e.byteArray.length;){var a=h(e);if(e.seek(-4),"xfffee0dd"===a)return t.length=e.position-t.dataOffset,e.seek(8);a=D(e,r);t.items.push(a)}e.warnings.push("eof encountered before finding sequence delimiter in sequence of undefined length"),t.length=e.byteArray.length-t.dataOffset}:function(e,t,r){for(var a=t.dataOffset+t.length;e.position<a;){var n=D(e,r);t.items.push(n)}})(e,t,r)}function O(e,t){var r=S(e);return 4294967295===r.length?(r.hadUndefinedLength=!0,r.dataSet=function(e,t){for(var r={};e.position<e.byteArray.length;){var a=B(e,t);if("xfffee00d"===(r[a.tag]=a).tag)return new w(e.byteArrayParser,e.byteArray,r)}return t.push("eof encountered before finding item delimiter tag while reading sequence item of undefined length"),new w(e.byteArrayParser,e.byteArray,r)}(e,t),r.length=e.position-r.dataOffset):(r.dataSet=new w(e.byteArrayParser,e.byteArray,{}),q(r.dataSet,e,e.position+r.length)),r}function I(e,t,r){if(void 0===e)throw"dicomParser.readSequenceItemsExplicit: missing required parameter 'byteStream'";if(void 0===t)throw"dicomParser.readSequenceItemsExplicit: missing required parameter 'element'";t.items=[],(4294967295===t.length?function(e,t,r){for(;e.position+4<=e.byteArray.length;){var a=h(e);if(e.seek(-4),"xfffee0dd"===a)return t.length=e.position-t.dataOffset,e.seek(8);a=O(e,r);t.items.push(a)}r.push("eof encountered before finding sequence delimitation tag while reading sequence of undefined length"),t.length=e.position-t.dataOffset}:function(e,t,r){for(var a=t.dataOffset+t.length;e.position<a;){var n=O(e,r);t.items.push(n)}})(e,t,r)}var U=function(e){return"OB"===e||"OD"===e||"OL"===e||"OW"===e||"SQ"===e||"OF"===e||"UC"===e||"UR"===e||"UT"===e||"UN"===e?4:2};function B(e,t,r){if(void 0===e)throw"dicomParser.readDicomElementExplicit: missing required parameter 'byteStream'";var a={tag:h(e),vr:e.readFixedString(2)};return 2===U(a.vr)?a.length=e.readUint16():(e.seek(2),a.length=e.readUint32()),a.dataOffset=e.position,4294967295===a.length&&(a.hadUndefinedLength=!0),a.tag===r||("SQ"===a.vr?I(e,a,t):4294967295===a.length?"x7fe00010"===a.tag?g(e,a,t):("UN"===a.vr?F:x)(e,a):e.seek(a.length)),a}function q(e,t,r){var a=3<arguments.length&&void 0!==arguments[3]?arguments[3]:{};if(r=void 0===r?t.byteArray.length:r,void 0===t)throw"dicomParser.parseDicomDataSetExplicit: missing required parameter 'byteStream'";if(r<t.position||r>t.byteArray.length)throw"dicomParser.parseDicomDataSetExplicit: invalid value for parameter 'maxP osition'";for(var n=e.elements;t.position<r;){var i=B(t,e.warnings,a.untilTag);if((n[i.tag]=i).tag===a.untilTag)return}if(t.position>r)throw"dicomParser:parseDicomDataSetExplicit: buffer overrun"}function T(e,t,r){var a=3<arguments.length&&void 0!==arguments[3]?arguments[3]:{};if(r=void 0===r?e.byteArray.length:r,void 0===t)throw"dicomParser.parseDicomDataSetImplicit: missing required parameter 'byteStream'";if(r<t.position||r>t.byteArray.length)throw"dicomParser.parseDicomDataSetImplicit: invalid value for parameter 'maxPosition'";for(var n=e.elements;t.position<r;){var i=A(t,a.untilTag,a.vrCallback);if((n[i.tag]=i).tag===a.untilTag)return}}function k(e,t){if("undefined"!=typeof Buffer&&e instanceof Buffer)return Buffer.alloc(t);if(e instanceof Uint8Array)return new Uint8Array(t);throw"dicomParser.alloc: unknown type for byteArray"}var L="1.8.12",N={readUint16:function(e,t){if(t<0)throw"bigEndianByteArrayParser.readUint16: position cannot be less than 0";if(t+2>e.length)throw"bigEndianByteArrayParser.readUint16: attempt to read past end of buffer";return(e[t]<<8)+e[t+1]},readInt16:function(e,t){if(t<0)throw"bigEndianByteArrayParser.readInt16: position cannot be less than 0";if(t+2>e.length)throw"bigEndianByteArrayParser.readInt16: attempt to read past end of buffer";t=(e[t]<<8)+e[t+1];return t=32768&t?t-65535-1:t},readUint32:function(e,t){if(t<0)throw"bigEndianByteArrayParser.readUint32: position cannot be less than 0";if(t+4>e.length)throw"bigEndianByteArrayParser.readUint32: attempt to read past end of buffer";return 256*(256*(256*e[t]+e[t+1])+e[t+2])+e[t+3]},readInt32:function(e,t){if(t<0)throw"bigEndianByteArrayParser.readInt32: position cannot be less than 0";if(t+4>e.length)throw"bigEndianByteArrayParser.readInt32: attempt to read past end of buffer";return(e[t]<<24)+(e[t+1]<<16)+(e[t+2]<<8)+e[t+3]},readFloat:function(e,t){if(t<0)throw"bigEndianByteArrayParser.readFloat: position cannot be less than 0";if(t+4>e.length)throw"bigEndianByteArrayParser.readFloat: attempt to read past end of buffer";var r=new Uint8Array(4);return r[3]=e[t],r[2]=e[t+1],r[1]=e[t+2],r[0]=e[t+3],new Float32Array(r.buffer)[0]},readDouble:function(e,t){if(t<0)throw"bigEndianByteArrayParser.readDouble: position cannot be less than 0";if(t+8>e.length)throw"bigEndianByteArrayParser.readDouble: attempt to read past end of buffer";var r=new Uint8Array(8);return r[7]=e[t],r[6]=e[t+1],r[5]=e[t+2],r[4]=e[t+3],r[3]=e[t+4],r[2]=e[t+5],r[1]=e[t+6],r[0]=e[t+7],new Float64Array(r.buffer)[0]}};function j(e,t,r){if("undefined"!=typeof Buffer&&e instanceof Buffer)return e.slice(t,t+r);if(e instanceof Uint8Array)return new Uint8Array(e.buffer,e.byteOffset+t,r);throw"dicomParser.from: unknown type for byteArray"}function C(e,t){for(var r=0;r<t.length;r++){var a=t[r];a.enumerable=a.enumerable||!1,a.configurable=!0,"value"in a&&(a.writable=!0),Object.defineProperty(e,a.key,a)}}var J=function(){function a(e,t,r){if(!function(e,t){if(!(e instanceof t))throw new TypeError("Cannot call a class as a function")}(this,a),void 0===e)throw"dicomParser.ByteStream: missing required parameter 'byteArrayParser'";if(void 0===t)throw"dicomParser.ByteStream: missing required parameter 'byteArray'";if(t instanceof Uint8Array==!1&&("undefined"==typeof Buffer||t instanceof Buffer==!1))throw"dicomParser.ByteStream: parameter byteArray is not of type Uint8Array or Buffer";if(r<0)throw"dicomParser.ByteStream: parameter 'position' cannot be less than 0";if(r>=t.length)throw"dicomParser.ByteStream: parameter 'position' cannot be greater than or equal to 'byteArray' length";this.byteArrayParser=e,this.byteArray=t,this.position=r||0,this.warnings=[]}var e,t,r;return e=a,(t=[{key:"seek",value:function(e){if(this.position+e<0)throw"dicomParser.ByteStream.prototype.seek: cannot seek to position < 0";this.position+=e}},{key:"readByteStream",value:function(e){if(this.position+e>this.byteArray.length)throw"dicomParser.ByteStream.prototype.readByteStream: readByteStream - buffer overread";var t=j(this.byteArray,this.position,e);return this.position+=e,new a(this.byteArrayParser,t)}},{key:"getSize",value:function(){return this.byteArray.length}},{key:"readUint16",value:function(){var e=this.byteArrayParser.readUint16(this.byteArray,this.position);return this.position+=2,e}},{key:"readUint32",value:function(){var e=this.byteArrayParser.readUint32(this.byteArray,this.position);return this.position+=4,e}},{key:"readFixedString",value:function(e){var t=b(this.byteArray,this.position,e);return this.position+=e,t}}])&&C(e.prototype,t),r&&C(e,r),Object.defineProperty(e,"prototype",{writable:!1}),a}(),M={readUint16:function(e,t){if(t<0)throw"littleEndianByteArrayParser.readUint16: position cannot be less than 0";if(t+2>e.length)throw"littleEndianByteArrayParser.readUint16: attempt to read past end of buffer";return e[t]+256*e[t+1]},readInt16:function(e,t){if(t<0)throw"littleEndianByteArrayParser.readInt16: position cannot be less than 0";if(t+2>e.length)throw"littleEndianByteArrayParser.readInt16: attempt to read past end of buffer";t=e[t]+(e[t+1]<<8);return t=32768&t?t-65535-1:t},readUint32:function(e,t){if(t<0)throw"littleEndianByteArrayParser.readUint32: position cannot be less than 0";if(t+4>e.length)throw"littleEndianByteArrayParser.readUint32: attempt to read past end of buffer";return e[t]+256*e[t+1]+256*e[t+2]*256+256*e[t+3]*256*256},readInt32:function(e,t){if(t<0)throw"littleEndianByteArrayParser.readInt32: position cannot be less than 0";if(t+4>e.length)throw"littleEndianByteArrayParser.readInt32: attempt to read past end of buffer";return e[t]+(e[t+1]<<8)+(e[t+2]<<16)+(e[t+3]<<24)},readFloat:function(e,t){if(t<0)throw"littleEndianByteArrayParser.readFloat: position cannot be less than 0";if(t+4>e.length)throw"littleEndianByteArrayParser.readFloat: attempt to read past end of buffer";var r=new Uint8Array(4);return r[0]=e[t],r[1]=e[t+1],r[2]=e[t+2],r[3]=e[t+3],new Float32Array(r.buffer)[0]},readDouble:function(e,t){if(t<0)throw"littleEndianByteArrayParser.readDouble: position cannot be less than 0";if(t+8>e.length)throw"littleEndianByteArrayParser.readDouble: attempt to read past end of buffer";var r=new Uint8Array(8);return r[0]=e[t],r[1]=e[t+1],r[2]=e[t+2],r[3]=e[t+3],r[4]=e[t+4],r[5]=e[t+5],r[6]=e[t+6],r[7]=e[t+7],new Float64Array(r.buffer)[0]}};function G(e){var i=1<arguments.length&&void 0!==arguments[1]?arguments[1]:{};if(void 0===e)throw"dicomParser.readPart10Header: missing required parameter 'byteArray'";var o=i.TransferSyntaxUID,s=new J(M,e);return function(){var e=function(){if(s.getSize()<=132&&o)return!1;if(s.seek(128),"DICM"===s.readFixedString(4))return!0;if(!(i||{}).TransferSyntaxUID)throw"dicomParser.readPart10Header: DICM prefix not found at location 132 - this is not a valid DICOM P10 file.";return s.seek(0),!1}(),t=[],r={};if(!e)return s.position=0,{elements:{x00020010:{tag:"x00020010",vr:"UI",Value:o}},warnings:t};for(;s.position<s.byteArray.length;){var a=s.position,n=B(s,t);if("x0002ffff"<n.tag){s.position=a;break}n.parser=M,r[n.tag]=n}return(e=new w(s.byteArrayParser,s.byteArray,r)).warnings=s.warnings,e.position=s.position,e}()}var z="1.2.840.10008.1.2.2";function V(i){var o=1<arguments.length&&void 0!==arguments[1]?arguments[1]:{};if(void 0===i)throw new Error("dicomParser.parseDicom: missing required parameter 'byteArray'");var e,a=function(e){if(void 0===e.elements.x00020010)throw new Error("dicomParser.parseDicom: missing required meta header attribute 0002,0010");e=e.elements.x00020010;return e&&e.Value||b(i,e.dataOffset,e.length)};function t(t){var e=a(t),r="1.2.840.10008.1.2"!==e,e=function(e,t){var r="[object process]"===Object.prototype.toString.call("undefined"!=typeof process?process:0);if("1.2.840.10008.1.2.1.99"!==e)return new J(e===z?N:M,i,t);if(o&&o.inflater){e=o.inflater(i,t);return new J(M,e,0)}if(!0==r){var a=s(0),n=j(i,t,i.length-t),a=a.inflateRawSync(n),n=k(i,a.length+t);return i.copy(n,0,0,t),a.copy(n,t),new J(M,n,0)}if("undefined"==typeof pako)throw"dicomParser.parseDicom: no inflater available to handle deflate transfer syntax";return a=i.slice(t),n=pako.inflateRaw(a),(a=k(i,n.length+t)).set(i.slice(0,t),0),a.set(n,t),new J(M,a,0)}(e,t.position),t=new w(e.byteArrayParser,e.byteArray,{});t.warnings=e.warnings;try{(r?q:T)(t,e,e.byteArray.length,o)}catch(e){throw{exception:e,dataSet:t}}return t}return function(e,t){for(var r in e.elements)e.elements.hasOwnProperty(r)&&(t.elements[r]=e.elements[r]);return void 0!==e.warnings&&(t.warnings=e.warnings.concat(t.warnings)),t}(e=G(i,o),t(e))}var R=function(e,t,r){for(var a=0,n=t;n<t+r;n++)a+=e[n].length;return a};function _(e,t,r,a,n){if(n=n||t.fragments,void 0===e)throw"dicomParser.readEncapsulatedPixelDataFromFragments: missing required parameter 'dataSet'";if(void 0===t)throw"dicomParser.readEncapsulatedPixelDataFromFragments: missing required parameter 'pixelDataElement'";if(void 0===r)throw"dicomParser.readEncapsulatedPixelDataFromFragments: missing required parameter 'startFragmentIndex'";if(void 0===(a=a||1))throw"dicomParser.readEncapsulatedPixelDataFromFragments: missing required parameter 'numFragments'";if("x7fe00010"!==t.tag)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'pixelDataElement' refers to non pixel data tag (expected tag = x7fe00010";if(!0!==t.encapsulatedPixelData)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(!0!==t.hadUndefinedLength)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(void 0===t.basicOffsetTable)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(void 0===t.fragments)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(t.fragments.length<=0)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(r<0)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'startFragmentIndex' must be >= 0";if(r>=t.fragments.length)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'startFragmentIndex' must be < number of fragments";if(a<1)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'numFragments' must be > 0";if(r+a>t.fragments.length)throw"dicomParser.readEncapsulatedPixelDataFromFragments: parameter 'startFragment' + 'numFragments' < number of fragments";var i=new J(e.byteArrayParser,e.byteArray,t.dataOffset),t=S(i);if("xfffee000"!==t.tag)throw"dicomParser.readEncapsulatedPixelData: missing basic offset table xfffee000";i.seek(t.length);var o=i.position;if(1===a)return j(i.byteArray,o+n[r].offset+8,n[r].length);for(var t=R(n,r,a),s=k(i.byteArray,t),d=0,f=r;f<r+a;f++)for(var l=o+n[f].offset+8,u=0;u<n[f].length;u++)s[d++]=i.byteArray[l++];return s}var H=function(e,t){for(var r=0;r<e.length;r++)if(e[r].offset===t)return r},Q=function(e,t,r,a){if(e===t.length-1)return r.length-a;for(var n=t[e+1],i=a+1;i<r.length;i++)if(r[i].offset===n)return i-a;throw"dicomParser.calculateNumberOfFragmentsForFrame: could not find fragment with offset matching basic offset table"};function W(e,t,r,a,n){if(a=a||t.basicOffsetTable,n=n||t.fragments,void 0===e)throw"dicomParser.readEncapsulatedImageFrame: missing required parameter 'dataSet'";if(void 0===t)throw"dicomParser.readEncapsulatedImageFrame: missing required parameter 'pixelDataElement'";if(void 0===r)throw"dicomParser.readEncapsulatedImageFrame: missing required parameter 'frameIndex'";if(void 0===a)throw"dicomParser.readEncapsulatedImageFrame: parameter 'pixelDataElement' does not have basicOffsetTable";if("x7fe00010"!==t.tag)throw"dicomParser.readEncapsulatedImageFrame: parameter 'pixelDataElement' refers to non pixel data tag (expected tag = x7fe00010)";if(!0!==t.encapsulatedPixelData)throw"dicomParser.readEncapsulatedImageFrame: parameter 'pixelDataElement' refers to pixel data element that does not have encapsulated pixel data";if(!0!==t.hadUndefinedLength)throw"dicomParser.readEncapsulatedImageFrame: parameter 'pixelDataElement' refers to pixel data element that does not have undefined length";if(void 0===t.fragments)throw"dicomParser.readEncapsulatedImageFrame: parameter 'pixelDataElement' refers to pixel data element that does not have fragments";if(0===a.length)throw"dicomParser.readEncapsulatedImageFrame: basicOffsetTable has zero entries";if(r<0)throw"dicomParser.readEncapsulatedImageFrame: parameter 'frameIndex' must be >= 0";if(r>=a.length)throw"dicomParser.readEncapsulatedImageFrame: parameter 'frameIndex' must be < basicOffsetTable.length";var i=a[r],i=H(n,i);if(void 0===i)throw"dicomParser.readEncapsulatedImageFrame: unable to find fragment that matches basic offset table entry";return _(e,t,i,Q(r,a,n,i),n)}var $=!1;function K(e,t,r){if($||($=!0,console&&console.log&&console.log("WARNING: dicomParser.readEncapsulatedPixelData() has been deprecated")),void 0===e)throw"dicomParser.readEncapsulatedPixelData: missing required parameter 'dataSet'";if(void 0===t)throw"dicomParser.readEncapsulatedPixelData: missing required parameter 'element'";if(void 0===r)throw"dicomParser.readEncapsulatedPixelData: missing required parameter 'frame'";if("x7fe00010"!==t.tag)throw"dicomParser.readEncapsulatedPixelData: parameter 'element' refers to non pixel data tag (expected tag = x7fe00010)";if(!0!==t.encapsulatedPixelData)throw"dicomParser.readEncapsulatedPixelData: parameter 'element' refers to pixel data element that does not have encapsulated pixel data";if(!0!==t.hadUndefinedLength)throw"dicomParser.readEncapsulatedPixelData: parameter 'element' refers to pixel data element that does not have encapsulated pixel data";if(void 0===t.basicOffsetTable)throw"dicomParser.readEncapsulatedPixelData: parameter 'element' refers to pixel data element that does not have encapsulated pixel data";if(void 0===t.fragments)throw"dicomParser.readEncapsulatedPixelData: parameter 'element' refers to pixel data element that does not have encapsulated pixel data";if(r<0)throw"dicomParser.readEncapsulatedPixelData: parameter 'frame' must be >= 0";return 0!==t.basicOffsetTable.length?W(e,t,r):_(e,t,0,t.fragments.length)}t.default={isStringVr:d,isPrivateTag:f,parsePN:a,parseTM:n,parseDA:o,explicitElementToString:l,explicitDataSetToJS:u,createJPEGBasicOffsetTable:p,parseDicomDataSetExplicit:q,parseDicomDataSetImplicit:T,readFixedString:b,alloc:k,version:L,bigEndianByteArrayParser:N,ByteStream:J,sharedCopy:j,DataSet:w,findAndSetUNElementLength:y,findEndOfEncapsulatedElement:g,findItemDelimitationItemAndSetElementLength:x,littleEndianByteArrayParser:M,parseDicom:V,readDicomElementExplicit:B,readDicomElementImplicit:A,readEncapsulatedImageFrame:W,readEncapsulatedPixelData:K,readEncapsulatedPixelDataFromFragments:_,readPart10Header:G,readSequenceItemsExplicit:I,readSequenceItemsImplicit:F,readSequenceItem:S,readTag:h,LEI:"1.2.840.10008.1.2",LEE:"1.2.840.10008.1.2.1"}}],i={},n.m=a,n.c=i,n.d=function(e,t,r){n.o(e,t)||Object.defineProperty(e,t,{enumerable:!0,get:r})},n.r=function(e){"undefined"!=typeof Symbol&&Symbol.toStringTag&&Object.defineProperty(e,Symbol.toStringTag,{value:"Module"}),Object.defineProperty(e,"__esModule",{value:!0})},n.t=function(t,e){if(1&e&&(t=n(t)),8&e)return t;if(4&e&&"object"==typeof t&&t&&t.__esModule)return t;var r=Object.create(null);if(n.r(r),Object.defineProperty(r,"default",{enumerable:!0,value:t}),2&e&&"string"!=typeof t)for(var a in t)n.d(r,a,function(e){return t[e]}.bind(null,a));return r},n.n=function(e){var t=e&&e.__esModule?function(){return e.default}:function(){return e};return n.d(t,"a",t),t},n.o=function(e,t){return Object.prototype.hasOwnProperty.call(e,t)},n.p="",n(n.s=1);function n(e){if(i[e])return i[e].exports;var t=i[e]={i:e,l:!1,exports:{}};return a[e].call(t.exports,t,t.exports,n),t.l=!0,t.exports}var a,i});
+    //# sourceMappingURL=dicomParser.min.js.map
+    !function(e,t){"object"==typeof exports&&"undefined"!=typeof module?t(exports):"function"==typeof define&&define.amd?define(["exports"],t):t(e.nrrdjs={})}(this,function(e){"use strict";function t(e){let t=e.length;for(;--t>=0;)e[t]=0}const n=new Uint8Array([0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0]),i=new Uint8Array([0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13]),a=new Uint8Array([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,3,7]),r=new Uint8Array([16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]),s=new Array(576);t(s);const o=new Array(60);t(o);const l=new Array(512);t(l);const d=new Array(256);t(d);const h=new Array(29);t(h);const c=new Array(30);function f(e,t,n,i,a){this.static_tree=e,this.extra_bits=t,this.extra_base=n,this.elems=i,this.max_length=a,this.has_stree=e&&e.length}let u,_,m;function g(e,t){this.dyn_tree=e,this.max_code=0,this.stat_desc=t}t(c);const w=e=>e<256?l[e]:l[256+(e>>>7)],p=(e,t)=>{e.pending_buf[e.pending++]=255&t,e.pending_buf[e.pending++]=t>>>8&255},b=(e,t,n)=>{e.bi_valid>16-n?(e.bi_buf|=t<<e.bi_valid&65535,p(e,e.bi_buf),e.bi_buf=t>>16-e.bi_valid,e.bi_valid+=n-16):(e.bi_buf|=t<<e.bi_valid&65535,e.bi_valid+=n)},k=(e,t,n)=>{b(e,n[2*t],n[2*t+1])},y=(e,t)=>{let n=0;do{n|=1&e,e>>>=1,n<<=1}while(--t>0);return n>>>1},x=(e,t,n)=>{const i=new Array(16);let a,r,s=0;for(a=1;a<=15;a++)i[a]=s=s+n[a-1]<<1;for(r=0;r<=t;r++){let t=e[2*r+1];0!==t&&(e[2*r]=y(i[t]++,t))}},v=e=>{let t;for(t=0;t<286;t++)e.dyn_ltree[2*t]=0;for(t=0;t<30;t++)e.dyn_dtree[2*t]=0;for(t=0;t<19;t++)e.bl_tree[2*t]=0;e.dyn_ltree[512]=1,e.opt_len=e.static_len=0,e.last_lit=e.matches=0},E=e=>{e.bi_valid>8?p(e,e.bi_buf):e.bi_valid>0&&(e.pending_buf[e.pending++]=e.bi_buf),e.bi_buf=0,e.bi_valid=0},A=(e,t,n,i)=>{const a=2*t,r=2*n;return e[a]<e[r]||e[a]===e[r]&&i[t]<=i[n]},z=(e,t,n)=>{const i=e.heap[n];let a=n<<1;for(;a<=e.heap_len&&(a<e.heap_len&&A(t,e.heap[a+1],e.heap[a],e.depth)&&a++,!A(t,i,e.heap[a],e.depth));)e.heap[n]=e.heap[a],n=a,a<<=1;e.heap[n]=i},R=(e,t,a)=>{let r,s,o,l,f=0;if(0!==e.last_lit)do{r=e.pending_buf[e.d_buf+2*f]<<8|e.pending_buf[e.d_buf+2*f+1],s=e.pending_buf[e.l_buf+f],f++,0===r?k(e,s,t):(o=d[s],k(e,o+256+1,t),0!==(l=n[o])&&(s-=h[o],b(e,s,l)),o=w(--r),k(e,o,a),0!==(l=i[o])&&(r-=c[o],b(e,r,l)))}while(f<e.last_lit);k(e,256,t)},U=(e,t)=>{const n=t.dyn_tree,i=t.stat_desc.static_tree,a=t.stat_desc.has_stree,r=t.stat_desc.elems;let s,o,l,d=-1;for(e.heap_len=0,e.heap_max=573,s=0;s<r;s++)0!==n[2*s]?(e.heap[++e.heap_len]=d=s,e.depth[s]=0):n[2*s+1]=0;for(;e.heap_len<2;)n[2*(l=e.heap[++e.heap_len]=d<2?++d:0)]=1,e.depth[l]=0,e.opt_len--,a&&(e.static_len-=i[2*l+1]);for(t.max_code=d,s=e.heap_len>>1;s>=1;s--)z(e,n,s);l=r;do{s=e.heap[1],e.heap[1]=e.heap[e.heap_len--],z(e,n,1),o=e.heap[1],e.heap[--e.heap_max]=s,e.heap[--e.heap_max]=o,n[2*l]=n[2*s]+n[2*o],e.depth[l]=(e.depth[s]>=e.depth[o]?e.depth[s]:e.depth[o])+1,n[2*s+1]=n[2*o+1]=l,e.heap[1]=l++,z(e,n,1)}while(e.heap_len>=2);e.heap[--e.heap_max]=e.heap[1],((e,t)=>{const n=t.dyn_tree,i=t.max_code,a=t.stat_desc.static_tree,r=t.stat_desc.has_stree,s=t.stat_desc.extra_bits,o=t.stat_desc.extra_base,l=t.stat_desc.max_length;let d,h,c,f,u,_,m=0;for(f=0;f<=15;f++)e.bl_count[f]=0;for(n[2*e.heap[e.heap_max]+1]=0,d=e.heap_max+1;d<573;d++)(f=n[2*n[2*(h=e.heap[d])+1]+1]+1)>l&&(f=l,m++),n[2*h+1]=f,h>i||(e.bl_count[f]++,u=0,h>=o&&(u=s[h-o]),_=n[2*h],e.opt_len+=_*(f+u),r&&(e.static_len+=_*(a[2*h+1]+u)));if(0!==m){do{for(f=l-1;0===e.bl_count[f];)f--;e.bl_count[f]--,e.bl_count[f+1]+=2,e.bl_count[l]--,m-=2}while(m>0);for(f=l;0!==f;f--)for(h=e.bl_count[f];0!==h;)(c=e.heap[--d])>i||(n[2*c+1]!==f&&(e.opt_len+=(f-n[2*c+1])*n[2*c],n[2*c+1]=f),h--)}})(e,t),x(n,d,e.bl_count)},S=(e,t,n)=>{let i,a,r=-1,s=t[1],o=0,l=7,d=4;for(0===s&&(l=138,d=3),t[2*(n+1)+1]=65535,i=0;i<=n;i++)a=s,s=t[2*(i+1)+1],++o<l&&a===s||(o<d?e.bl_tree[2*a]+=o:0!==a?(a!==r&&e.bl_tree[2*a]++,e.bl_tree[32]++):o<=10?e.bl_tree[34]++:e.bl_tree[36]++,o=0,r=a,0===s?(l=138,d=3):a===s?(l=6,d=3):(l=7,d=4))},Z=(e,t,n)=>{let i,a,r=-1,s=t[1],o=0,l=7,d=4;for(0===s&&(l=138,d=3),i=0;i<=n;i++)if(a=s,s=t[2*(i+1)+1],!(++o<l&&a===s)){if(o<d)do{k(e,a,e.bl_tree)}while(0!=--o);else 0!==a?(a!==r&&(k(e,a,e.bl_tree),o--),k(e,16,e.bl_tree),b(e,o-3,2)):o<=10?(k(e,17,e.bl_tree),b(e,o-3,3)):(k(e,18,e.bl_tree),b(e,o-11,7));o=0,r=a,0===s?(l=138,d=3):a===s?(l=6,d=3):(l=7,d=4)}};let T=!1;const I=(e,t,n,i)=>{b(e,0+(i?1:0),3),((e,t,n,i)=>{E(e),i&&(p(e,n),p(e,~n)),e.pending_buf.set(e.window.subarray(t,t+n),e.pending),e.pending+=n})(e,t,n,!0)};var O={_tr_init:e=>{T||((()=>{let e,t,r,g,w;const p=new Array(16);for(r=0,g=0;g<28;g++)for(h[g]=r,e=0;e<1<<n[g];e++)d[r++]=g;for(d[r-1]=g,w=0,g=0;g<16;g++)for(c[g]=w,e=0;e<1<<i[g];e++)l[w++]=g;for(w>>=7;g<30;g++)for(c[g]=w<<7,e=0;e<1<<i[g]-7;e++)l[256+w++]=g;for(t=0;t<=15;t++)p[t]=0;for(e=0;e<=143;)s[2*e+1]=8,e++,p[8]++;for(;e<=255;)s[2*e+1]=9,e++,p[9]++;for(;e<=279;)s[2*e+1]=7,e++,p[7]++;for(;e<=287;)s[2*e+1]=8,e++,p[8]++;for(x(s,287,p),e=0;e<30;e++)o[2*e+1]=5,o[2*e]=y(e,5);u=new f(s,n,257,286,15),_=new f(o,i,0,30,15),m=new f(new Array(0),a,0,19,7)})(),T=!0),e.l_desc=new g(e.dyn_ltree,u),e.d_desc=new g(e.dyn_dtree,_),e.bl_desc=new g(e.bl_tree,m),e.bi_buf=0,e.bi_valid=0,v(e)},_tr_stored_block:I,_tr_flush_block:(e,t,n,i)=>{let a,l,d=0;e.level>0?(2===e.strm.data_type&&(e.strm.data_type=(e=>{let t,n=4093624447;for(t=0;t<=31;t++,n>>>=1)if(1&n&&0!==e.dyn_ltree[2*t])return 0;if(0!==e.dyn_ltree[18]||0!==e.dyn_ltree[20]||0!==e.dyn_ltree[26])return 1;for(t=32;t<256;t++)if(0!==e.dyn_ltree[2*t])return 1;return 0})(e)),U(e,e.l_desc),U(e,e.d_desc),d=(e=>{let t;for(S(e,e.dyn_ltree,e.l_desc.max_code),S(e,e.dyn_dtree,e.d_desc.max_code),U(e,e.bl_desc),t=18;t>=3&&0===e.bl_tree[2*r[t]+1];t--);return e.opt_len+=3*(t+1)+5+5+4,t})(e),a=e.opt_len+3+7>>>3,(l=e.static_len+3+7>>>3)<=a&&(a=l)):a=l=n+5,n+4<=a&&-1!==t?I(e,t,n,i):4===e.strategy||l===a?(b(e,2+(i?1:0),3),R(e,s,o)):(b(e,4+(i?1:0),3),((e,t,n,i)=>{let a;for(b(e,t-257,5),b(e,n-1,5),b(e,i-4,4),a=0;a<i;a++)b(e,e.bl_tree[2*r[a]+1],3);Z(e,e.dyn_ltree,t-1),Z(e,e.dyn_dtree,n-1)})(e,e.l_desc.max_code+1,e.d_desc.max_code+1,d+1),R(e,e.dyn_ltree,e.dyn_dtree)),v(e),i&&E(e)},_tr_tally:(e,t,n)=>(e.pending_buf[e.d_buf+2*e.last_lit]=t>>>8&255,e.pending_buf[e.d_buf+2*e.last_lit+1]=255&t,e.pending_buf[e.l_buf+e.last_lit]=255&n,e.last_lit++,0===t?e.dyn_ltree[2*n]++:(e.matches++,t--,e.dyn_ltree[2*(d[n]+256+1)]++,e.dyn_dtree[2*w(t)]++),e.last_lit===e.lit_bufsize-1),_tr_align:e=>{b(e,2,3),k(e,256,s),(e=>{16===e.bi_valid?(p(e,e.bi_buf),e.bi_buf=0,e.bi_valid=0):e.bi_valid>=8&&(e.pending_buf[e.pending++]=255&e.bi_buf,e.bi_buf>>=8,e.bi_valid-=8)})(e)}};var F=(e,t,n,i)=>{let a=65535&e|0,r=e>>>16&65535|0,s=0;for(;0!==n;){n-=s=n>2e3?2e3:n;do{r=r+(a=a+t[i++]|0)|0}while(--s);a%=65521,r%=65521}return a|r<<16|0};const D=new Uint32Array((()=>{let e,t=[];for(var n=0;n<256;n++){e=n;for(var i=0;i<8;i++)e=1&e?3988292384^e>>>1:e>>>1;t[n]=e}return t})());var B=(e,t,n,i)=>{const a=D,r=i+n;e^=-1;for(let n=i;n<r;n++)e=e>>>8^a[255&(e^t[n])];return-1^e},N={2:"need dictionary",1:"stream end",0:"","-1":"file error","-2":"stream error","-3":"data error","-4":"insufficient memory","-5":"buffer error","-6":"incompatible version"},L={Z_NO_FLUSH:0,Z_PARTIAL_FLUSH:1,Z_SYNC_FLUSH:2,Z_FULL_FLUSH:3,Z_FINISH:4,Z_BLOCK:5,Z_TREES:6,Z_OK:0,Z_STREAM_END:1,Z_NEED_DICT:2,Z_ERRNO:-1,Z_STREAM_ERROR:-2,Z_DATA_ERROR:-3,Z_MEM_ERROR:-4,Z_BUF_ERROR:-5,Z_NO_COMPRESSION:0,Z_BEST_SPEED:1,Z_BEST_COMPRESSION:9,Z_DEFAULT_COMPRESSION:-1,Z_FILTERED:1,Z_HUFFMAN_ONLY:2,Z_RLE:3,Z_FIXED:4,Z_DEFAULT_STRATEGY:0,Z_BINARY:0,Z_TEXT:1,Z_UNKNOWN:2,Z_DEFLATED:8};const{_tr_init:C,_tr_stored_block:M,_tr_flush_block:P,_tr_tally:j,_tr_align:H}=O,{Z_NO_FLUSH:Y,Z_PARTIAL_FLUSH:K,Z_FULL_FLUSH:V,Z_FINISH:W,Z_BLOCK:X,Z_OK:G,Z_STREAM_END:$,Z_STREAM_ERROR:q,Z_DATA_ERROR:J,Z_BUF_ERROR:Q,Z_DEFAULT_COMPRESSION:ee,Z_FILTERED:te,Z_HUFFMAN_ONLY:ne,Z_RLE:ie,Z_FIXED:ae,Z_DEFAULT_STRATEGY:re,Z_UNKNOWN:se,Z_DEFLATED:oe}=L,le=286,de=30,he=19,ce=2*le+1,fe=15,ue=(e,t)=>(e.msg=N[t],t),_e=e=>(e<<1)-(e>4?9:0),me=e=>{let t=e.length;for(;--t>=0;)e[t]=0};let ge=(e,t,n)=>(t<<e.hash_shift^n)&e.hash_mask;const we=e=>{const t=e.state;let n=t.pending;n>e.avail_out&&(n=e.avail_out),0!==n&&(e.output.set(t.pending_buf.subarray(t.pending_out,t.pending_out+n),e.next_out),e.next_out+=n,t.pending_out+=n,e.total_out+=n,e.avail_out-=n,t.pending-=n,0===t.pending&&(t.pending_out=0))},pe=(e,t)=>{P(e,e.block_start>=0?e.block_start:-1,e.strstart-e.block_start,t),e.block_start=e.strstart,we(e.strm)},be=(e,t)=>{e.pending_buf[e.pending++]=t},ke=(e,t)=>{e.pending_buf[e.pending++]=t>>>8&255,e.pending_buf[e.pending++]=255&t},ye=(e,t,n,i)=>{let a=e.avail_in;return a>i&&(a=i),0===a?0:(e.avail_in-=a,t.set(e.input.subarray(e.next_in,e.next_in+a),n),1===e.state.wrap?e.adler=F(e.adler,t,a,n):2===e.state.wrap&&(e.adler=B(e.adler,t,a,n)),e.next_in+=a,e.total_in+=a,a)},xe=(e,t)=>{let n,i,a=e.max_chain_length,r=e.strstart,s=e.prev_length,o=e.nice_match;const l=e.strstart>e.w_size-262?e.strstart-(e.w_size-262):0,d=e.window,h=e.w_mask,c=e.prev,f=e.strstart+258;let u=d[r+s-1],_=d[r+s];e.prev_length>=e.good_match&&(a>>=2),o>e.lookahead&&(o=e.lookahead);do{if(d[(n=t)+s]===_&&d[n+s-1]===u&&d[n]===d[r]&&d[++n]===d[r+1]){r+=2,n++;do{}while(d[++r]===d[++n]&&d[++r]===d[++n]&&d[++r]===d[++n]&&d[++r]===d[++n]&&d[++r]===d[++n]&&d[++r]===d[++n]&&d[++r]===d[++n]&&d[++r]===d[++n]&&r<f);if(i=258-(f-r),r=f-258,i>s){if(e.match_start=t,s=i,i>=o)break;u=d[r+s-1],_=d[r+s]}}}while((t=c[t&h])>l&&0!=--a);return s<=e.lookahead?s:e.lookahead},ve=e=>{const t=e.w_size;let n,i,a,r,s;do{if(r=e.window_size-e.lookahead-e.strstart,e.strstart>=t+(t-262)){e.window.set(e.window.subarray(t,t+t),0),e.match_start-=t,e.strstart-=t,e.block_start-=t,n=i=e.hash_size;do{a=e.head[--n],e.head[n]=a>=t?a-t:0}while(--i);n=i=t;do{a=e.prev[--n],e.prev[n]=a>=t?a-t:0}while(--i);r+=t}if(0===e.strm.avail_in)break;if(i=ye(e.strm,e.window,e.strstart+e.lookahead,r),e.lookahead+=i,e.lookahead+e.insert>=3)for(s=e.strstart-e.insert,e.ins_h=e.window[s],e.ins_h=ge(e,e.ins_h,e.window[s+1]);e.insert&&(e.ins_h=ge(e,e.ins_h,e.window[s+3-1]),e.prev[s&e.w_mask]=e.head[e.ins_h],e.head[e.ins_h]=s,s++,e.insert--,!(e.lookahead+e.insert<3)););}while(e.lookahead<262&&0!==e.strm.avail_in)},Ee=(e,t)=>{let n,i;for(;;){if(e.lookahead<262){if(ve(e),e.lookahead<262&&t===Y)return 1;if(0===e.lookahead)break}if(n=0,e.lookahead>=3&&(e.ins_h=ge(e,e.ins_h,e.window[e.strstart+3-1]),n=e.prev[e.strstart&e.w_mask]=e.head[e.ins_h],e.head[e.ins_h]=e.strstart),0!==n&&e.strstart-n<=e.w_size-262&&(e.match_length=xe(e,n)),e.match_length>=3)if(i=j(e,e.strstart-e.match_start,e.match_length-3),e.lookahead-=e.match_length,e.match_length<=e.max_lazy_match&&e.lookahead>=3){e.match_length--;do{e.strstart++,e.ins_h=ge(e,e.ins_h,e.window[e.strstart+3-1]),n=e.prev[e.strstart&e.w_mask]=e.head[e.ins_h],e.head[e.ins_h]=e.strstart}while(0!=--e.match_length);e.strstart++}else e.strstart+=e.match_length,e.match_length=0,e.ins_h=e.window[e.strstart],e.ins_h=ge(e,e.ins_h,e.window[e.strstart+1]);else i=j(e,0,e.window[e.strstart]),e.lookahead--,e.strstart++;if(i&&(pe(e,!1),0===e.strm.avail_out))return 1}return e.insert=e.strstart<2?e.strstart:2,t===W?(pe(e,!0),0===e.strm.avail_out?3:4):e.last_lit&&(pe(e,!1),0===e.strm.avail_out)?1:2},Ae=(e,t)=>{let n,i,a;for(;;){if(e.lookahead<262){if(ve(e),e.lookahead<262&&t===Y)return 1;if(0===e.lookahead)break}if(n=0,e.lookahead>=3&&(e.ins_h=ge(e,e.ins_h,e.window[e.strstart+3-1]),n=e.prev[e.strstart&e.w_mask]=e.head[e.ins_h],e.head[e.ins_h]=e.strstart),e.prev_length=e.match_length,e.prev_match=e.match_start,e.match_length=2,0!==n&&e.prev_length<e.max_lazy_match&&e.strstart-n<=e.w_size-262&&(e.match_length=xe(e,n),e.match_length<=5&&(e.strategy===te||3===e.match_length&&e.strstart-e.match_start>4096)&&(e.match_length=2)),e.prev_length>=3&&e.match_length<=e.prev_length){a=e.strstart+e.lookahead-3,i=j(e,e.strstart-1-e.prev_match,e.prev_length-3),e.lookahead-=e.prev_length-1,e.prev_length-=2;do{++e.strstart<=a&&(e.ins_h=ge(e,e.ins_h,e.window[e.strstart+3-1]),n=e.prev[e.strstart&e.w_mask]=e.head[e.ins_h],e.head[e.ins_h]=e.strstart)}while(0!=--e.prev_length);if(e.match_available=0,e.match_length=2,e.strstart++,i&&(pe(e,!1),0===e.strm.avail_out))return 1}else if(e.match_available){if((i=j(e,0,e.window[e.strstart-1]))&&pe(e,!1),e.strstart++,e.lookahead--,0===e.strm.avail_out)return 1}else e.match_available=1,e.strstart++,e.lookahead--}return e.match_available&&(i=j(e,0,e.window[e.strstart-1]),e.match_available=0),e.insert=e.strstart<2?e.strstart:2,t===W?(pe(e,!0),0===e.strm.avail_out?3:4):e.last_lit&&(pe(e,!1),0===e.strm.avail_out)?1:2};function ze(e,t,n,i,a){this.good_length=e,this.max_lazy=t,this.nice_length=n,this.max_chain=i,this.func=a}const Re=[new ze(0,0,0,0,(e,t)=>{let n=65535;for(n>e.pending_buf_size-5&&(n=e.pending_buf_size-5);;){if(e.lookahead<=1){if(ve(e),0===e.lookahead&&t===Y)return 1;if(0===e.lookahead)break}e.strstart+=e.lookahead,e.lookahead=0;const i=e.block_start+n;if((0===e.strstart||e.strstart>=i)&&(e.lookahead=e.strstart-i,e.strstart=i,pe(e,!1),0===e.strm.avail_out))return 1;if(e.strstart-e.block_start>=e.w_size-262&&(pe(e,!1),0===e.strm.avail_out))return 1}return e.insert=0,t===W?(pe(e,!0),0===e.strm.avail_out?3:4):(e.strstart>e.block_start&&(pe(e,!1),e.strm.avail_out),1)}),new ze(4,4,8,4,Ee),new ze(4,5,16,8,Ee),new ze(4,6,32,32,Ee),new ze(4,4,16,16,Ae),new ze(8,16,32,32,Ae),new ze(8,16,128,128,Ae),new ze(8,32,128,256,Ae),new ze(32,128,258,1024,Ae),new ze(32,258,258,4096,Ae)];function Ue(){this.strm=null,this.status=0,this.pending_buf=null,this.pending_buf_size=0,this.pending_out=0,this.pending=0,this.wrap=0,this.gzhead=null,this.gzindex=0,this.method=oe,this.last_flush=-1,this.w_size=0,this.w_bits=0,this.w_mask=0,this.window=null,this.window_size=0,this.prev=null,this.head=null,this.ins_h=0,this.hash_size=0,this.hash_bits=0,this.hash_mask=0,this.hash_shift=0,this.block_start=0,this.match_length=0,this.prev_match=0,this.match_available=0,this.strstart=0,this.match_start=0,this.lookahead=0,this.prev_length=0,this.max_chain_length=0,this.max_lazy_match=0,this.level=0,this.strategy=0,this.good_match=0,this.nice_match=0,this.dyn_ltree=new Uint16Array(2*ce),this.dyn_dtree=new Uint16Array(2*(2*de+1)),this.bl_tree=new Uint16Array(2*(2*he+1)),me(this.dyn_ltree),me(this.dyn_dtree),me(this.bl_tree),this.l_desc=null,this.d_desc=null,this.bl_desc=null,this.bl_count=new Uint16Array(fe+1),this.heap=new Uint16Array(2*le+1),me(this.heap),this.heap_len=0,this.heap_max=0,this.depth=new Uint16Array(2*le+1),me(this.depth),this.l_buf=0,this.lit_bufsize=0,this.last_lit=0,this.d_buf=0,this.opt_len=0,this.static_len=0,this.matches=0,this.insert=0,this.bi_buf=0,this.bi_valid=0}const Se=e=>{if(!e||!e.state)return ue(e,q);e.total_in=e.total_out=0,e.data_type=se;const t=e.state;return t.pending=0,t.pending_out=0,t.wrap<0&&(t.wrap=-t.wrap),t.status=t.wrap?42:113,e.adler=2===t.wrap?0:1,t.last_flush=Y,C(t),G},Ze=e=>{const t=Se(e);return t===G&&(e=>{e.window_size=2*e.w_size,me(e.head),e.max_lazy_match=Re[e.level].max_lazy,e.good_match=Re[e.level].good_length,e.nice_match=Re[e.level].nice_length,e.max_chain_length=Re[e.level].max_chain,e.strstart=0,e.block_start=0,e.lookahead=0,e.insert=0,e.match_length=e.prev_length=2,e.match_available=0,e.ins_h=0})(e.state),t},Te=(e,t,n,i,a,r)=>{if(!e)return q;let s=1;if(t===ee&&(t=6),i<0?(s=0,i=-i):i>15&&(s=2,i-=16),a<1||a>9||n!==oe||i<8||i>15||t<0||t>9||r<0||r>ae)return ue(e,q);8===i&&(i=9);const o=new Ue;return e.state=o,o.strm=e,o.wrap=s,o.gzhead=null,o.w_bits=i,o.w_size=1<<o.w_bits,o.w_mask=o.w_size-1,o.hash_bits=a+7,o.hash_size=1<<o.hash_bits,o.hash_mask=o.hash_size-1,o.hash_shift=~~((o.hash_bits+3-1)/3),o.window=new Uint8Array(2*o.w_size),o.head=new Uint16Array(o.hash_size),o.prev=new Uint16Array(o.w_size),o.lit_bufsize=1<<a+6,o.pending_buf_size=4*o.lit_bufsize,o.pending_buf=new Uint8Array(o.pending_buf_size),o.d_buf=1*o.lit_bufsize,o.l_buf=3*o.lit_bufsize,o.level=t,o.strategy=r,o.method=n,Ze(e)};var Ie={deflateInit:(e,t)=>Te(e,t,oe,15,8,re),deflateInit2:Te,deflateReset:Ze,deflateResetKeep:Se,deflateSetHeader:(e,t)=>e&&e.state?2!==e.state.wrap?q:(e.state.gzhead=t,G):q,deflate:(e,t)=>{let n,i;if(!e||!e.state||t>X||t<0)return e?ue(e,q):q;const a=e.state;if(!e.output||!e.input&&0!==e.avail_in||666===a.status&&t!==W)return ue(e,0===e.avail_out?Q:q);a.strm=e;const r=a.last_flush;if(a.last_flush=t,42===a.status)if(2===a.wrap)e.adler=0,be(a,31),be(a,139),be(a,8),a.gzhead?(be(a,(a.gzhead.text?1:0)+(a.gzhead.hcrc?2:0)+(a.gzhead.extra?4:0)+(a.gzhead.name?8:0)+(a.gzhead.comment?16:0)),be(a,255&a.gzhead.time),be(a,a.gzhead.time>>8&255),be(a,a.gzhead.time>>16&255),be(a,a.gzhead.time>>24&255),be(a,9===a.level?2:a.strategy>=ne||a.level<2?4:0),be(a,255&a.gzhead.os),a.gzhead.extra&&a.gzhead.extra.length&&(be(a,255&a.gzhead.extra.length),be(a,a.gzhead.extra.length>>8&255)),a.gzhead.hcrc&&(e.adler=B(e.adler,a.pending_buf,a.pending,0)),a.gzindex=0,a.status=69):(be(a,0),be(a,0),be(a,0),be(a,0),be(a,0),be(a,9===a.level?2:a.strategy>=ne||a.level<2?4:0),be(a,3),a.status=113);else{let t=oe+(a.w_bits-8<<4)<<8,n=-1;t|=(n=a.strategy>=ne||a.level<2?0:a.level<6?1:6===a.level?2:3)<<6,0!==a.strstart&&(t|=32),t+=31-t%31,a.status=113,ke(a,t),0!==a.strstart&&(ke(a,e.adler>>>16),ke(a,65535&e.adler)),e.adler=1}if(69===a.status)if(a.gzhead.extra){for(n=a.pending;a.gzindex<(65535&a.gzhead.extra.length)&&(a.pending!==a.pending_buf_size||(a.gzhead.hcrc&&a.pending>n&&(e.adler=B(e.adler,a.pending_buf,a.pending-n,n)),we(e),n=a.pending,a.pending!==a.pending_buf_size));)be(a,255&a.gzhead.extra[a.gzindex]),a.gzindex++;a.gzhead.hcrc&&a.pending>n&&(e.adler=B(e.adler,a.pending_buf,a.pending-n,n)),a.gzindex===a.gzhead.extra.length&&(a.gzindex=0,a.status=73)}else a.status=73;if(73===a.status)if(a.gzhead.name){n=a.pending;do{if(a.pending===a.pending_buf_size&&(a.gzhead.hcrc&&a.pending>n&&(e.adler=B(e.adler,a.pending_buf,a.pending-n,n)),we(e),n=a.pending,a.pending===a.pending_buf_size)){i=1;break}i=a.gzindex<a.gzhead.name.length?255&a.gzhead.name.charCodeAt(a.gzindex++):0,be(a,i)}while(0!==i);a.gzhead.hcrc&&a.pending>n&&(e.adler=B(e.adler,a.pending_buf,a.pending-n,n)),0===i&&(a.gzindex=0,a.status=91)}else a.status=91;if(91===a.status)if(a.gzhead.comment){n=a.pending;do{if(a.pending===a.pending_buf_size&&(a.gzhead.hcrc&&a.pending>n&&(e.adler=B(e.adler,a.pending_buf,a.pending-n,n)),we(e),n=a.pending,a.pending===a.pending_buf_size)){i=1;break}i=a.gzindex<a.gzhead.comment.length?255&a.gzhead.comment.charCodeAt(a.gzindex++):0,be(a,i)}while(0!==i);a.gzhead.hcrc&&a.pending>n&&(e.adler=B(e.adler,a.pending_buf,a.pending-n,n)),0===i&&(a.status=103)}else a.status=103;if(103===a.status&&(a.gzhead.hcrc?(a.pending+2>a.pending_buf_size&&we(e),a.pending+2<=a.pending_buf_size&&(be(a,255&e.adler),be(a,e.adler>>8&255),e.adler=0,a.status=113)):a.status=113),0!==a.pending){if(we(e),0===e.avail_out)return a.last_flush=-1,G}else if(0===e.avail_in&&_e(t)<=_e(r)&&t!==W)return ue(e,Q);if(666===a.status&&0!==e.avail_in)return ue(e,Q);if(0!==e.avail_in||0!==a.lookahead||t!==Y&&666!==a.status){let n=a.strategy===ne?((e,t)=>{let n;for(;;){if(0===e.lookahead&&(ve(e),0===e.lookahead)){if(t===Y)return 1;break}if(e.match_length=0,n=j(e,0,e.window[e.strstart]),e.lookahead--,e.strstart++,n&&(pe(e,!1),0===e.strm.avail_out))return 1}return e.insert=0,t===W?(pe(e,!0),0===e.strm.avail_out?3:4):e.last_lit&&(pe(e,!1),0===e.strm.avail_out)?1:2})(a,t):a.strategy===ie?((e,t)=>{let n,i,a,r;const s=e.window;for(;;){if(e.lookahead<=258){if(ve(e),e.lookahead<=258&&t===Y)return 1;if(0===e.lookahead)break}if(e.match_length=0,e.lookahead>=3&&e.strstart>0&&(i=s[a=e.strstart-1])===s[++a]&&i===s[++a]&&i===s[++a]){r=e.strstart+258;do{}while(i===s[++a]&&i===s[++a]&&i===s[++a]&&i===s[++a]&&i===s[++a]&&i===s[++a]&&i===s[++a]&&i===s[++a]&&a<r);e.match_length=258-(r-a),e.match_length>e.lookahead&&(e.match_length=e.lookahead)}if(e.match_length>=3?(n=j(e,1,e.match_length-3),e.lookahead-=e.match_length,e.strstart+=e.match_length,e.match_length=0):(n=j(e,0,e.window[e.strstart]),e.lookahead--,e.strstart++),n&&(pe(e,!1),0===e.strm.avail_out))return 1}return e.insert=0,t===W?(pe(e,!0),0===e.strm.avail_out?3:4):e.last_lit&&(pe(e,!1),0===e.strm.avail_out)?1:2})(a,t):Re[a.level].func(a,t);if(3!==n&&4!==n||(a.status=666),1===n||3===n)return 0===e.avail_out&&(a.last_flush=-1),G;if(2===n&&(t===K?H(a):t!==X&&(M(a,0,0,!1),t===V&&(me(a.head),0===a.lookahead&&(a.strstart=0,a.block_start=0,a.insert=0))),we(e),0===e.avail_out))return a.last_flush=-1,G}return t!==W?G:a.wrap<=0?$:(2===a.wrap?(be(a,255&e.adler),be(a,e.adler>>8&255),be(a,e.adler>>16&255),be(a,e.adler>>24&255),be(a,255&e.total_in),be(a,e.total_in>>8&255),be(a,e.total_in>>16&255),be(a,e.total_in>>24&255)):(ke(a,e.adler>>>16),ke(a,65535&e.adler)),we(e),a.wrap>0&&(a.wrap=-a.wrap),0!==a.pending?G:$)},deflateEnd:e=>{if(!e||!e.state)return q;const t=e.state.status;return 42!==t&&69!==t&&73!==t&&91!==t&&103!==t&&113!==t&&666!==t?ue(e,q):(e.state=null,113===t?ue(e,J):G)},deflateSetDictionary:(e,t)=>{let n=t.length;if(!e||!e.state)return q;const i=e.state,a=i.wrap;if(2===a||1===a&&42!==i.status||i.lookahead)return q;if(1===a&&(e.adler=F(e.adler,t,n,0)),i.wrap=0,n>=i.w_size){0===a&&(me(i.head),i.strstart=0,i.block_start=0,i.insert=0);let e=new Uint8Array(i.w_size);e.set(t.subarray(n-i.w_size,n),0),t=e,n=i.w_size}const r=e.avail_in,s=e.next_in,o=e.input;for(e.avail_in=n,e.next_in=0,e.input=t,ve(i);i.lookahead>=3;){let e=i.strstart,t=i.lookahead-2;do{i.ins_h=ge(i,i.ins_h,i.window[e+3-1]),i.prev[e&i.w_mask]=i.head[i.ins_h],i.head[i.ins_h]=e,e++}while(--t);i.strstart=e,i.lookahead=2,ve(i)}return i.strstart+=i.lookahead,i.block_start=i.strstart,i.insert=i.lookahead,i.lookahead=0,i.match_length=i.prev_length=2,i.match_available=0,e.next_in=s,e.input=o,e.avail_in=r,i.wrap=a,G},deflateInfo:"pako deflate (from Nodeca project)"};const Oe=(e,t)=>Object.prototype.hasOwnProperty.call(e,t);var Fe={assign:function(e){const t=Array.prototype.slice.call(arguments,1);for(;t.length;){const n=t.shift();if(n){if("object"!=typeof n)throw new TypeError(n+"must be non-object");for(const t in n)Oe(n,t)&&(e[t]=n[t])}}return e},flattenChunks:e=>{let t=0;for(let n=0,i=e.length;n<i;n++)t+=e[n].length;const n=new Uint8Array(t);for(let t=0,i=0,a=e.length;t<a;t++){let a=e[t];n.set(a,i),i+=a.length}return n}};let De=!0;try{String.fromCharCode.apply(null,new Uint8Array(1))}catch(e){De=!1}const Be=new Uint8Array(256);for(let e=0;e<256;e++)Be[e]=e>=252?6:e>=248?5:e>=240?4:e>=224?3:e>=192?2:1;Be[254]=Be[254]=1;var Ne={string2buf:e=>{if("function"==typeof TextEncoder&&TextEncoder.prototype.encode)return(new TextEncoder).encode(e);let t,n,i,a,r,s=e.length,o=0;for(a=0;a<s;a++)55296==(64512&(n=e.charCodeAt(a)))&&a+1<s&&56320==(64512&(i=e.charCodeAt(a+1)))&&(n=65536+(n-55296<<10)+(i-56320),a++),o+=n<128?1:n<2048?2:n<65536?3:4;for(t=new Uint8Array(o),r=0,a=0;r<o;a++)55296==(64512&(n=e.charCodeAt(a)))&&a+1<s&&56320==(64512&(i=e.charCodeAt(a+1)))&&(n=65536+(n-55296<<10)+(i-56320),a++),n<128?t[r++]=n:n<2048?(t[r++]=192|n>>>6,t[r++]=128|63&n):n<65536?(t[r++]=224|n>>>12,t[r++]=128|n>>>6&63,t[r++]=128|63&n):(t[r++]=240|n>>>18,t[r++]=128|n>>>12&63,t[r++]=128|n>>>6&63,t[r++]=128|63&n);return t},buf2string:(e,t)=>{const n=t||e.length;if("function"==typeof TextDecoder&&TextDecoder.prototype.decode)return(new TextDecoder).decode(e.subarray(0,t));let i,a;const r=new Array(2*n);for(a=0,i=0;i<n;){let t=e[i++];if(t<128){r[a++]=t;continue}let s=Be[t];if(s>4)r[a++]=65533,i+=s-1;else{for(t&=2===s?31:3===s?15:7;s>1&&i<n;)t=t<<6|63&e[i++],s--;s>1?r[a++]=65533:t<65536?r[a++]=t:(t-=65536,r[a++]=55296|t>>10&1023,r[a++]=56320|1023&t)}}return((e,t)=>{if(t<65534&&e.subarray&&De)return String.fromCharCode.apply(null,e.length===t?e:e.subarray(0,t));let n="";for(let i=0;i<t;i++)n+=String.fromCharCode(e[i]);return n})(r,a)},utf8border:(e,t)=>{(t=t||e.length)>e.length&&(t=e.length);let n=t-1;for(;n>=0&&128==(192&e[n]);)n--;return n<0?t:0===n?t:n+Be[e[n]]>t?n:t}};var Le=function(){this.input=null,this.next_in=0,this.avail_in=0,this.total_in=0,this.output=null,this.next_out=0,this.avail_out=0,this.total_out=0,this.msg="",this.state=null,this.data_type=2,this.adler=0};const Ce=Object.prototype.toString,{Z_NO_FLUSH:Me,Z_SYNC_FLUSH:Pe,Z_FULL_FLUSH:je,Z_FINISH:He,Z_OK:Ye,Z_STREAM_END:Ke,Z_DEFAULT_COMPRESSION:Ve,Z_DEFAULT_STRATEGY:We,Z_DEFLATED:Xe}=L;function Ge(e){this.options=Fe.assign({level:Ve,method:Xe,chunkSize:16384,windowBits:15,memLevel:8,strategy:We},e||{});let t=this.options;t.raw&&t.windowBits>0?t.windowBits=-t.windowBits:t.gzip&&t.windowBits>0&&t.windowBits<16&&(t.windowBits+=16),this.err=0,this.msg="",this.ended=!1,this.chunks=[],this.strm=new Le,this.strm.avail_out=0;let n=Ie.deflateInit2(this.strm,t.level,t.method,t.windowBits,t.memLevel,t.strategy);if(n!==Ye)throw new Error(N[n]);if(t.header&&Ie.deflateSetHeader(this.strm,t.header),t.dictionary){let e;if(e="string"==typeof t.dictionary?Ne.string2buf(t.dictionary):"[object ArrayBuffer]"===Ce.call(t.dictionary)?new Uint8Array(t.dictionary):t.dictionary,(n=Ie.deflateSetDictionary(this.strm,e))!==Ye)throw new Error(N[n]);this._dict_set=!0}}function $e(e,t){const n=new Ge(t);if(n.push(e,!0),n.err)throw n.msg||N[n.err];return n.result}Ge.prototype.push=function(e,t){const n=this.strm,i=this.options.chunkSize;let a,r;if(this.ended)return!1;for(r=t===~~t?t:!0===t?He:Me,"string"==typeof e?n.input=Ne.string2buf(e):"[object ArrayBuffer]"===Ce.call(e)?n.input=new Uint8Array(e):n.input=e,n.next_in=0,n.avail_in=n.input.length;;)if(0===n.avail_out&&(n.output=new Uint8Array(i),n.next_out=0,n.avail_out=i),(r===Pe||r===je)&&n.avail_out<=6)this.onData(n.output.subarray(0,n.next_out)),n.avail_out=0;else{if((a=Ie.deflate(n,r))===Ke)return n.next_out>0&&this.onData(n.output.subarray(0,n.next_out)),a=Ie.deflateEnd(this.strm),this.onEnd(a),this.ended=!0,a===Ye;if(0!==n.avail_out){if(r>0&&n.next_out>0)this.onData(n.output.subarray(0,n.next_out)),n.avail_out=0;else if(0===n.avail_in)break}else this.onData(n.output)}return!0},Ge.prototype.onData=function(e){this.chunks.push(e)},Ge.prototype.onEnd=function(e){e===Ye&&(this.result=Fe.flattenChunks(this.chunks)),this.chunks=[],this.err=e,this.msg=this.strm.msg};var qe={Deflate:Ge,deflate:$e,deflateRaw:function(e,t){return(t=t||{}).raw=!0,$e(e,t)},gzip:function(e,t){return(t=t||{}).gzip=!0,$e(e,t)},constants:L};var Je=function(e,t){let n,i,a,r,s,o,l,d,h,c,f,u,_,m,g,w,p,b,k,y,x,v,E,A;const z=e.state;n=e.next_in,E=e.input,i=n+(e.avail_in-5),a=e.next_out,A=e.output,r=a-(t-e.avail_out),s=a+(e.avail_out-257),o=z.dmax,l=z.wsize,d=z.whave,h=z.wnext,c=z.window,f=z.hold,u=z.bits,_=z.lencode,m=z.distcode,g=(1<<z.lenbits)-1,w=(1<<z.distbits)-1;e:do{u<15&&(f+=E[n++]<<u,u+=8,f+=E[n++]<<u,u+=8),p=_[f&g];t:for(;;){if(f>>>=b=p>>>24,u-=b,0===(b=p>>>16&255))A[a++]=65535&p;else{if(!(16&b)){if(0==(64&b)){p=_[(65535&p)+(f&(1<<b)-1)];continue t}if(32&b){z.mode=12;break e}e.msg="invalid literal/length code",z.mode=30;break e}k=65535&p,(b&=15)&&(u<b&&(f+=E[n++]<<u,u+=8),k+=f&(1<<b)-1,f>>>=b,u-=b),u<15&&(f+=E[n++]<<u,u+=8,f+=E[n++]<<u,u+=8),p=m[f&w];n:for(;;){if(f>>>=b=p>>>24,u-=b,!(16&(b=p>>>16&255))){if(0==(64&b)){p=m[(65535&p)+(f&(1<<b)-1)];continue n}e.msg="invalid distance code",z.mode=30;break e}if(y=65535&p,u<(b&=15)&&(f+=E[n++]<<u,(u+=8)<b&&(f+=E[n++]<<u,u+=8)),(y+=f&(1<<b)-1)>o){e.msg="invalid distance too far back",z.mode=30;break e}if(f>>>=b,u-=b,y>(b=a-r)){if((b=y-b)>d&&z.sane){e.msg="invalid distance too far back",z.mode=30;break e}if(x=0,v=c,0===h){if(x+=l-b,b<k){k-=b;do{A[a++]=c[x++]}while(--b);x=a-y,v=A}}else if(h<b){if(x+=l+h-b,(b-=h)<k){k-=b;do{A[a++]=c[x++]}while(--b);if(x=0,h<k){k-=b=h;do{A[a++]=c[x++]}while(--b);x=a-y,v=A}}}else if(x+=h-b,b<k){k-=b;do{A[a++]=c[x++]}while(--b);x=a-y,v=A}for(;k>2;)A[a++]=v[x++],A[a++]=v[x++],A[a++]=v[x++],k-=3;k&&(A[a++]=v[x++],k>1&&(A[a++]=v[x++]))}else{x=a-y;do{A[a++]=A[x++],A[a++]=A[x++],A[a++]=A[x++],k-=3}while(k>2);k&&(A[a++]=A[x++],k>1&&(A[a++]=A[x++]))}break}}break}}while(n<i&&a<s);n-=k=u>>3,f&=(1<<(u-=k<<3))-1,e.next_in=n,e.next_out=a,e.avail_in=n<i?i-n+5:5-(n-i),e.avail_out=a<s?s-a+257:257-(a-s),z.hold=f,z.bits=u};const Qe=new Uint16Array([3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258,0,0]),et=new Uint8Array([16,16,16,16,16,16,16,16,17,17,17,17,18,18,18,18,19,19,19,19,20,20,20,20,21,21,21,21,16,72,78]),tt=new Uint16Array([1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577,0,0]),nt=new Uint8Array([16,16,16,16,17,17,18,18,19,19,20,20,21,21,22,22,23,23,24,24,25,25,26,26,27,27,28,28,29,29,64,64]);var it=(e,t,n,i,a,r,s,o)=>{const l=o.bits;let d,h,c,f,u,_,m=0,g=0,w=0,p=0,b=0,k=0,y=0,x=0,v=0,E=0,A=null,z=0;const R=new Uint16Array(16),U=new Uint16Array(16);let S,Z,T,I=null,O=0;for(m=0;m<=15;m++)R[m]=0;for(g=0;g<i;g++)R[t[n+g]]++;for(b=l,p=15;p>=1&&0===R[p];p--);if(b>p&&(b=p),0===p)return a[r++]=20971520,a[r++]=20971520,o.bits=1,0;for(w=1;w<p&&0===R[w];w++);for(b<w&&(b=w),x=1,m=1;m<=15;m++)if(x<<=1,(x-=R[m])<0)return-1;if(x>0&&(0===e||1!==p))return-1;for(U[1]=0,m=1;m<15;m++)U[m+1]=U[m]+R[m];for(g=0;g<i;g++)0!==t[n+g]&&(s[U[t[n+g]]++]=g);if(0===e?(A=I=s,_=19):1===e?(A=Qe,z-=257,I=et,O-=257,_=256):(A=tt,I=nt,_=-1),E=0,g=0,m=w,u=r,k=b,y=0,c=-1,f=(v=1<<b)-1,1===e&&v>852||2===e&&v>592)return 1;for(;;){S=m-y,s[g]<_?(Z=0,T=s[g]):s[g]>_?(Z=I[O+s[g]],T=A[z+s[g]]):(Z=96,T=0),d=1<<m-y,w=h=1<<k;do{a[u+(E>>y)+(h-=d)]=S<<24|Z<<16|T|0}while(0!==h);for(d=1<<m-1;E&d;)d>>=1;if(0!==d?(E&=d-1,E+=d):E=0,g++,0==--R[m]){if(m===p)break;m=t[n+s[g]]}if(m>b&&(E&f)!==c){for(0===y&&(y=b),u+=w,x=1<<(k=m-y);k+y<p&&!((x-=R[k+y])<=0);)k++,x<<=1;if(v+=1<<k,1===e&&v>852||2===e&&v>592)return 1;a[c=E&f]=b<<24|k<<16|u-r|0}}return 0!==E&&(a[u+E]=m-y<<24|64<<16|0),o.bits=b,0};const{Z_FINISH:at,Z_BLOCK:rt,Z_TREES:st,Z_OK:ot,Z_STREAM_END:lt,Z_NEED_DICT:dt,Z_STREAM_ERROR:ht,Z_DATA_ERROR:ct,Z_MEM_ERROR:ft,Z_BUF_ERROR:ut,Z_DEFLATED:_t}=L,mt=e=>(e>>>24&255)+(e>>>8&65280)+((65280&e)<<8)+((255&e)<<24);function gt(){this.mode=0,this.last=!1,this.wrap=0,this.havedict=!1,this.flags=0,this.dmax=0,this.check=0,this.total=0,this.head=null,this.wbits=0,this.wsize=0,this.whave=0,this.wnext=0,this.window=null,this.hold=0,this.bits=0,this.length=0,this.offset=0,this.extra=0,this.lencode=null,this.distcode=null,this.lenbits=0,this.distbits=0,this.ncode=0,this.nlen=0,this.ndist=0,this.have=0,this.next=null,this.lens=new Uint16Array(320),this.work=new Uint16Array(288),this.lendyn=null,this.distdyn=null,this.sane=0,this.back=0,this.was=0}const wt=e=>{if(!e||!e.state)return ht;const t=e.state;return e.total_in=e.total_out=t.total=0,e.msg="",t.wrap&&(e.adler=1&t.wrap),t.mode=1,t.last=0,t.havedict=0,t.dmax=32768,t.head=null,t.hold=0,t.bits=0,t.lencode=t.lendyn=new Int32Array(852),t.distcode=t.distdyn=new Int32Array(592),t.sane=1,t.back=-1,ot},pt=e=>{if(!e||!e.state)return ht;const t=e.state;return t.wsize=0,t.whave=0,t.wnext=0,wt(e)},bt=(e,t)=>{let n;if(!e||!e.state)return ht;const i=e.state;return t<0?(n=0,t=-t):(n=1+(t>>4),t<48&&(t&=15)),t&&(t<8||t>15)?ht:(null!==i.window&&i.wbits!==t&&(i.window=null),i.wrap=n,i.wbits=t,pt(e))},kt=(e,t)=>{if(!e)return ht;const n=new gt;e.state=n,n.window=null;const i=bt(e,t);return i!==ot&&(e.state=null),i};let yt,xt,vt=!0;const Et=e=>{if(vt){yt=new Int32Array(512),xt=new Int32Array(32);let t=0;for(;t<144;)e.lens[t++]=8;for(;t<256;)e.lens[t++]=9;for(;t<280;)e.lens[t++]=7;for(;t<288;)e.lens[t++]=8;for(it(1,e.lens,0,288,yt,0,e.work,{bits:9}),t=0;t<32;)e.lens[t++]=5;it(2,e.lens,0,32,xt,0,e.work,{bits:5}),vt=!1}e.lencode=yt,e.lenbits=9,e.distcode=xt,e.distbits=5},At=(e,t,n,i)=>{let a;const r=e.state;return null===r.window&&(r.wsize=1<<r.wbits,r.wnext=0,r.whave=0,r.window=new Uint8Array(r.wsize)),i>=r.wsize?(r.window.set(t.subarray(n-r.wsize,n),0),r.wnext=0,r.whave=r.wsize):((a=r.wsize-r.wnext)>i&&(a=i),r.window.set(t.subarray(n-i,n-i+a),r.wnext),(i-=a)?(r.window.set(t.subarray(n-i,n),0),r.wnext=i,r.whave=r.wsize):(r.wnext+=a,r.wnext===r.wsize&&(r.wnext=0),r.whave<r.wsize&&(r.whave+=a))),0};var zt={inflateReset:pt,inflateReset2:bt,inflateResetKeep:wt,inflateInit:e=>kt(e,15),inflateInit2:kt,inflate:(e,t)=>{let n,i,a,r,s,o,l,d,h,c,f,u,_,m,g,w,p,b,k,y,x,v,E=0;const A=new Uint8Array(4);let z,R;const U=new Uint8Array([16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]);if(!e||!e.state||!e.output||!e.input&&0!==e.avail_in)return ht;12===(n=e.state).mode&&(n.mode=13),s=e.next_out,a=e.output,l=e.avail_out,r=e.next_in,i=e.input,o=e.avail_in,d=n.hold,h=n.bits,c=o,f=l,v=ot;e:for(;;)switch(n.mode){case 1:if(0===n.wrap){n.mode=13;break}for(;h<16;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(2&n.wrap&&35615===d){n.check=0,A[0]=255&d,A[1]=d>>>8&255,n.check=B(n.check,A,2,0),d=0,h=0,n.mode=2;break}if(n.flags=0,n.head&&(n.head.done=!1),!(1&n.wrap)||(((255&d)<<8)+(d>>8))%31){e.msg="incorrect header check",n.mode=30;break}if((15&d)!==_t){e.msg="unknown compression method",n.mode=30;break}if(h-=4,x=8+(15&(d>>>=4)),0===n.wbits)n.wbits=x;else if(x>n.wbits){e.msg="invalid window size",n.mode=30;break}n.dmax=1<<n.wbits,e.adler=n.check=1,n.mode=512&d?10:12,d=0,h=0;break;case 2:for(;h<16;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(n.flags=d,(255&n.flags)!==_t){e.msg="unknown compression method",n.mode=30;break}if(57344&n.flags){e.msg="unknown header flags set",n.mode=30;break}n.head&&(n.head.text=d>>8&1),512&n.flags&&(A[0]=255&d,A[1]=d>>>8&255,n.check=B(n.check,A,2,0)),d=0,h=0,n.mode=3;case 3:for(;h<32;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}n.head&&(n.head.time=d),512&n.flags&&(A[0]=255&d,A[1]=d>>>8&255,A[2]=d>>>16&255,A[3]=d>>>24&255,n.check=B(n.check,A,4,0)),d=0,h=0,n.mode=4;case 4:for(;h<16;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}n.head&&(n.head.xflags=255&d,n.head.os=d>>8),512&n.flags&&(A[0]=255&d,A[1]=d>>>8&255,n.check=B(n.check,A,2,0)),d=0,h=0,n.mode=5;case 5:if(1024&n.flags){for(;h<16;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}n.length=d,n.head&&(n.head.extra_len=d),512&n.flags&&(A[0]=255&d,A[1]=d>>>8&255,n.check=B(n.check,A,2,0)),d=0,h=0}else n.head&&(n.head.extra=null);n.mode=6;case 6:if(1024&n.flags&&((u=n.length)>o&&(u=o),u&&(n.head&&(x=n.head.extra_len-n.length,n.head.extra||(n.head.extra=new Uint8Array(n.head.extra_len)),n.head.extra.set(i.subarray(r,r+u),x)),512&n.flags&&(n.check=B(n.check,i,u,r)),o-=u,r+=u,n.length-=u),n.length))break e;n.length=0,n.mode=7;case 7:if(2048&n.flags){if(0===o)break e;u=0;do{x=i[r+u++],n.head&&x&&n.length<65536&&(n.head.name+=String.fromCharCode(x))}while(x&&u<o);if(512&n.flags&&(n.check=B(n.check,i,u,r)),o-=u,r+=u,x)break e}else n.head&&(n.head.name=null);n.length=0,n.mode=8;case 8:if(4096&n.flags){if(0===o)break e;u=0;do{x=i[r+u++],n.head&&x&&n.length<65536&&(n.head.comment+=String.fromCharCode(x))}while(x&&u<o);if(512&n.flags&&(n.check=B(n.check,i,u,r)),o-=u,r+=u,x)break e}else n.head&&(n.head.comment=null);n.mode=9;case 9:if(512&n.flags){for(;h<16;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(d!==(65535&n.check)){e.msg="header crc mismatch",n.mode=30;break}d=0,h=0}n.head&&(n.head.hcrc=n.flags>>9&1,n.head.done=!0),e.adler=n.check=0,n.mode=12;break;case 10:for(;h<32;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}e.adler=n.check=mt(d),d=0,h=0,n.mode=11;case 11:if(0===n.havedict)return e.next_out=s,e.avail_out=l,e.next_in=r,e.avail_in=o,n.hold=d,n.bits=h,dt;e.adler=n.check=1,n.mode=12;case 12:if(t===rt||t===st)break e;case 13:if(n.last){d>>>=7&h,h-=7&h,n.mode=27;break}for(;h<3;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}switch(n.last=1&d,h-=1,3&(d>>>=1)){case 0:n.mode=14;break;case 1:if(Et(n),n.mode=20,t===st){d>>>=2,h-=2;break e}break;case 2:n.mode=17;break;case 3:e.msg="invalid block type",n.mode=30}d>>>=2,h-=2;break;case 14:for(d>>>=7&h,h-=7&h;h<32;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if((65535&d)!=(d>>>16^65535)){e.msg="invalid stored block lengths",n.mode=30;break}if(n.length=65535&d,d=0,h=0,n.mode=15,t===st)break e;case 15:n.mode=16;case 16:if(u=n.length){if(u>o&&(u=o),u>l&&(u=l),0===u)break e;a.set(i.subarray(r,r+u),s),o-=u,r+=u,l-=u,s+=u,n.length-=u;break}n.mode=12;break;case 17:for(;h<14;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(n.nlen=257+(31&d),d>>>=5,h-=5,n.ndist=1+(31&d),d>>>=5,h-=5,n.ncode=4+(15&d),d>>>=4,h-=4,n.nlen>286||n.ndist>30){e.msg="too many length or distance symbols",n.mode=30;break}n.have=0,n.mode=18;case 18:for(;n.have<n.ncode;){for(;h<3;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}n.lens[U[n.have++]]=7&d,d>>>=3,h-=3}for(;n.have<19;)n.lens[U[n.have++]]=0;if(n.lencode=n.lendyn,n.lenbits=7,z={bits:n.lenbits},v=it(0,n.lens,0,19,n.lencode,0,n.work,z),n.lenbits=z.bits,v){e.msg="invalid code lengths set",n.mode=30;break}n.have=0,n.mode=19;case 19:for(;n.have<n.nlen+n.ndist;){for(;w=(E=n.lencode[d&(1<<n.lenbits)-1])>>>16&255,p=65535&E,!((g=E>>>24)<=h);){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(p<16)d>>>=g,h-=g,n.lens[n.have++]=p;else{if(16===p){for(R=g+2;h<R;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(d>>>=g,h-=g,0===n.have){e.msg="invalid bit length repeat",n.mode=30;break}x=n.lens[n.have-1],u=3+(3&d),d>>>=2,h-=2}else if(17===p){for(R=g+3;h<R;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}h-=g,x=0,u=3+(7&(d>>>=g)),d>>>=3,h-=3}else{for(R=g+7;h<R;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}h-=g,x=0,u=11+(127&(d>>>=g)),d>>>=7,h-=7}if(n.have+u>n.nlen+n.ndist){e.msg="invalid bit length repeat",n.mode=30;break}for(;u--;)n.lens[n.have++]=x}}if(30===n.mode)break;if(0===n.lens[256]){e.msg="invalid code -- missing end-of-block",n.mode=30;break}if(n.lenbits=9,z={bits:n.lenbits},v=it(1,n.lens,0,n.nlen,n.lencode,0,n.work,z),n.lenbits=z.bits,v){e.msg="invalid literal/lengths set",n.mode=30;break}if(n.distbits=6,n.distcode=n.distdyn,z={bits:n.distbits},v=it(2,n.lens,n.nlen,n.ndist,n.distcode,0,n.work,z),n.distbits=z.bits,v){e.msg="invalid distances set",n.mode=30;break}if(n.mode=20,t===st)break e;case 20:n.mode=21;case 21:if(o>=6&&l>=258){e.next_out=s,e.avail_out=l,e.next_in=r,e.avail_in=o,n.hold=d,n.bits=h,Je(e,f),s=e.next_out,a=e.output,l=e.avail_out,r=e.next_in,i=e.input,o=e.avail_in,d=n.hold,h=n.bits,12===n.mode&&(n.back=-1);break}for(n.back=0;w=(E=n.lencode[d&(1<<n.lenbits)-1])>>>16&255,p=65535&E,!((g=E>>>24)<=h);){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(w&&0==(240&w)){for(b=g,k=w,y=p;w=(E=n.lencode[y+((d&(1<<b+k)-1)>>b)])>>>16&255,p=65535&E,!(b+(g=E>>>24)<=h);){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}d>>>=b,h-=b,n.back+=b}if(d>>>=g,h-=g,n.back+=g,n.length=p,0===w){n.mode=26;break}if(32&w){n.back=-1,n.mode=12;break}if(64&w){e.msg="invalid literal/length code",n.mode=30;break}n.extra=15&w,n.mode=22;case 22:if(n.extra){for(R=n.extra;h<R;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}n.length+=d&(1<<n.extra)-1,d>>>=n.extra,h-=n.extra,n.back+=n.extra}n.was=n.length,n.mode=23;case 23:for(;w=(E=n.distcode[d&(1<<n.distbits)-1])>>>16&255,p=65535&E,!((g=E>>>24)<=h);){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(0==(240&w)){for(b=g,k=w,y=p;w=(E=n.distcode[y+((d&(1<<b+k)-1)>>b)])>>>16&255,p=65535&E,!(b+(g=E>>>24)<=h);){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}d>>>=b,h-=b,n.back+=b}if(d>>>=g,h-=g,n.back+=g,64&w){e.msg="invalid distance code",n.mode=30;break}n.offset=p,n.extra=15&w,n.mode=24;case 24:if(n.extra){for(R=n.extra;h<R;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}n.offset+=d&(1<<n.extra)-1,d>>>=n.extra,h-=n.extra,n.back+=n.extra}if(n.offset>n.dmax){e.msg="invalid distance too far back",n.mode=30;break}n.mode=25;case 25:if(0===l)break e;if(u=f-l,n.offset>u){if((u=n.offset-u)>n.whave&&n.sane){e.msg="invalid distance too far back",n.mode=30;break}u>n.wnext?(u-=n.wnext,_=n.wsize-u):_=n.wnext-u,u>n.length&&(u=n.length),m=n.window}else m=a,_=s-n.offset,u=n.length;u>l&&(u=l),l-=u,n.length-=u;do{a[s++]=m[_++]}while(--u);0===n.length&&(n.mode=21);break;case 26:if(0===l)break e;a[s++]=n.length,l--,n.mode=21;break;case 27:if(n.wrap){for(;h<32;){if(0===o)break e;o--,d|=i[r++]<<h,h+=8}if(f-=l,e.total_out+=f,n.total+=f,f&&(e.adler=n.check=n.flags?B(n.check,a,f,s-f):F(n.check,a,f,s-f)),f=l,(n.flags?d:mt(d))!==n.check){e.msg="incorrect data check",n.mode=30;break}d=0,h=0}n.mode=28;case 28:if(n.wrap&&n.flags){for(;h<32;){if(0===o)break e;o--,d+=i[r++]<<h,h+=8}if(d!==(4294967295&n.total)){e.msg="incorrect length check",n.mode=30;break}d=0,h=0}n.mode=29;case 29:v=lt;break e;case 30:v=ct;break e;case 31:return ft;case 32:default:return ht}return e.next_out=s,e.avail_out=l,e.next_in=r,e.avail_in=o,n.hold=d,n.bits=h,(n.wsize||f!==e.avail_out&&n.mode<30&&(n.mode<27||t!==at))&&At(e,e.output,e.next_out,f-e.avail_out),c-=e.avail_in,f-=e.avail_out,e.total_in+=c,e.total_out+=f,n.total+=f,n.wrap&&f&&(e.adler=n.check=n.flags?B(n.check,a,f,e.next_out-f):F(n.check,a,f,e.next_out-f)),e.data_type=n.bits+(n.last?64:0)+(12===n.mode?128:0)+(20===n.mode||15===n.mode?256:0),(0===c&&0===f||t===at)&&v===ot&&(v=ut),v},inflateEnd:e=>{if(!e||!e.state)return ht;let t=e.state;return t.window&&(t.window=null),e.state=null,ot},inflateGetHeader:(e,t)=>{if(!e||!e.state)return ht;const n=e.state;return 0==(2&n.wrap)?ht:(n.head=t,t.done=!1,ot)},inflateSetDictionary:(e,t)=>{const n=t.length;let i,a,r;return e&&e.state?0!==(i=e.state).wrap&&11!==i.mode?ht:11===i.mode&&(a=F(a=1,t,n,0))!==i.check?ct:(r=At(e,t,n,n))?(i.mode=31,ft):(i.havedict=1,ot):ht},inflateInfo:"pako inflate (from Nodeca project)"};var Rt=function(){this.text=0,this.time=0,this.xflags=0,this.os=0,this.extra=null,this.extra_len=0,this.name="",this.comment="",this.hcrc=0,this.done=!1};const Ut=Object.prototype.toString,{Z_NO_FLUSH:St,Z_FINISH:Zt,Z_OK:Tt,Z_STREAM_END:It,Z_NEED_DICT:Ot,Z_STREAM_ERROR:Ft,Z_DATA_ERROR:Dt,Z_MEM_ERROR:Bt}=L;function Nt(e){this.options=Fe.assign({chunkSize:65536,windowBits:15,to:""},e||{});const t=this.options;t.raw&&t.windowBits>=0&&t.windowBits<16&&(t.windowBits=-t.windowBits,0===t.windowBits&&(t.windowBits=-15)),!(t.windowBits>=0&&t.windowBits<16)||e&&e.windowBits||(t.windowBits+=32),t.windowBits>15&&t.windowBits<48&&0==(15&t.windowBits)&&(t.windowBits|=15),this.err=0,this.msg="",this.ended=!1,this.chunks=[],this.strm=new Le,this.strm.avail_out=0;let n=zt.inflateInit2(this.strm,t.windowBits);if(n!==Tt)throw new Error(N[n]);if(this.header=new Rt,zt.inflateGetHeader(this.strm,this.header),t.dictionary&&("string"==typeof t.dictionary?t.dictionary=Ne.string2buf(t.dictionary):"[object ArrayBuffer]"===Ut.call(t.dictionary)&&(t.dictionary=new Uint8Array(t.dictionary)),t.raw&&(n=zt.inflateSetDictionary(this.strm,t.dictionary))!==Tt))throw new Error(N[n])}function Lt(e,t){const n=new Nt(t);if(n.push(e),n.err)throw n.msg||N[n.err];return n.result}Nt.prototype.push=function(e,t){const n=this.strm,i=this.options.chunkSize,a=this.options.dictionary;let r,s,o;if(this.ended)return!1;for(s=t===~~t?t:!0===t?Zt:St,"[object ArrayBuffer]"===Ut.call(e)?n.input=new Uint8Array(e):n.input=e,n.next_in=0,n.avail_in=n.input.length;;){for(0===n.avail_out&&(n.output=new Uint8Array(i),n.next_out=0,n.avail_out=i),(r=zt.inflate(n,s))===Ot&&a&&((r=zt.inflateSetDictionary(n,a))===Tt?r=zt.inflate(n,s):r===Dt&&(r=Ot));n.avail_in>0&&r===It&&n.state.wrap>0&&0!==e[n.next_in];)zt.inflateReset(n),r=zt.inflate(n,s);switch(r){case Ft:case Dt:case Ot:case Bt:return this.onEnd(r),this.ended=!0,!1}if(o=n.avail_out,n.next_out&&(0===n.avail_out||r===It))if("string"===this.options.to){let e=Ne.utf8border(n.output,n.next_out),t=n.next_out-e,a=Ne.buf2string(n.output,e);n.next_out=t,n.avail_out=i-t,t&&n.output.set(n.output.subarray(e,e+t),0),this.onData(a)}else this.onData(n.output.length===n.next_out?n.output:n.output.subarray(0,n.next_out));if(r!==Tt||0!==o){if(r===It)return r=zt.inflateEnd(this.strm),this.onEnd(r),this.ended=!0,!0;if(0===n.avail_in)break}}return!0},Nt.prototype.onData=function(e){this.chunks.push(e)},Nt.prototype.onEnd=function(e){e===Tt&&("string"===this.options.to?this.result=this.chunks.join(""):this.result=Fe.flattenChunks(this.chunks)),this.chunks=[],this.err=e,this.msg=this.strm.msg};var Ct={Inflate:Nt,inflate:Lt,inflateRaw:function(e,t){return(t=t||{}).raw=!0,Lt(e,t)},ungzip:Lt,constants:L};const{Deflate:Mt,deflate:Pt,deflateRaw:jt,gzip:Ht}=qe,{Inflate:Yt,inflate:Kt,inflateRaw:Vt,ungzip:Wt}=Ct;var Xt={Deflate:Mt,deflate:Pt,deflateRaw:jt,gzip:Ht,Inflate:Yt,inflate:Kt,inflateRaw:Vt,ungzip:Wt,constants:L};const Gt={"signed char":Int8Array,int8:Int8Array,int8_t:Int8Array,uchar:Uint8Array,"unsigned char":Uint8Array,uint8:Uint8Array,uint8_t:Uint8Array,short:Int16Array,"short int":Int16Array,"signed short":Int16Array,"signed short int":Int16Array,int16:Int16Array,int16_t:Int16Array,ushort:Uint16Array,"unsigned short":Uint16Array,"unsigned short int":Uint16Array,uint16:Uint16Array,uint16_t:Uint16Array,int:Int32Array,"signed int":Int32Array,int32:Int32Array,int32_t:Int32Array,uint:Uint32Array,"unsigned int":Uint32Array,uint32:Uint32Array,uint32_t:Uint32Array,longlong:BigInt64Array,"long long":BigInt64Array,"long long int":BigInt64Array,"signed long long":BigInt64Array,"signed long long int":BigInt64Array,int64:BigInt64Array,int64_t:BigInt64Array,ulonglong:BigUint64Array,"unsigned long long":BigUint64Array,"unsigned long long int":BigUint64Array,uint64:BigUint64Array,uint64_t:BigUint64Array,float:Float32Array,double:Float64Array},$t={"signed char":"getInt8",int8:"getInt8",int8_t:"getInt8",uchar:"getUint8","unsigned char":"getUint8",uint8:"getUint8",uint8_t:"getUint8",short:"getInt16","short int":"getInt16","signed short":"getInt16","signed short int":"getInt16",int16:"getInt16",int16_t:"getInt16",ushort:"getUint16","unsigned short":"getUint16","unsigned short int":"getUint16",uint16:"getUint16",uint16_t:"getUint16",int:"getInt32","signed int":"getInt32",int32:"getInt32",int32_t:"getInt32",uint:"getUint32","unsigned int":"getUint32",uint32:"getUint32",uint32_t:"getUint32",longlong:null,"long long":null,"long long int":null,"signed long long":null,"signed long long int":null,int64:null,int64_t:null,ulonglong:null,"unsigned long long":null,"unsigned long long int":null,uint64:null,uint64_t:null,float:"getFloat32",double:"getFloat64"},qt={"right-anterior-superior":3,ras:3,"left-anterior-superior":3,las:3,"left-posterior-superior":3,lps:3,"right-anterior-superior-time":4,rast:4,"left-anterior-superior-time":4,last:4,"left-posterior-superior-time":4,lpst:4,"scanner-xyz":3,"scanner-xyz-time":4,"3d-right-handed":3,"3d-left-handed":3,"3d-right-handed-time":4,"3d-left-handed-time":4},Jt={domain:null,space:null,time:null,list:null,point:null,vector:null,"covariant-vector":null,normal:null,stub:1,scalar:1,complex:2,"2-vector":2,"3-color":3,"rgb-color":3,"hsv-color":3,"xyz-color":3,"4-color":4,"rgba-color":4,"3-vector":3,"3-gradient":3,"3-normal":3,"4-vector":4,quaternion:4,"2d-symmetric-matrix":3,"2d-masked-symmetric-matrix":4,"2d-matrix":4,"2d-masked-matrix":4,"3d-symmetric-matrix":6,"3d-masked-symmetric-matrix":7,"3d-matrix":9,"3d-masked-matrix":10,"???":null};var Qt=1e-6,en="undefined"!=typeof Float32Array?Float32Array:Array;Math.PI;function tn(){var e=new en(3);return en!=Float32Array&&(e[0]=0,e[1]=0,e[2]=0),e}function nn(e,t,n){var i=new en(3);return i[0]=e,i[1]=t,i[2]=n,i}function an(e,t,n){var i=t[0],a=t[1],r=t[2],s=n[0],o=n[1],l=n[2];return e[0]=a*l-r*o,e[1]=r*s-i*l,e[2]=i*o-a*s,e}var rn,sn=function(e){var t=e[0],n=e[1],i=e[2];return Math.sqrt(t*t+n*n+i*i)};rn=tn();!function(){var e,t=(e=new en(4),en!=Float32Array&&(e[0]=0,e[1]=0,e[2]=0,e[3]=0),e)}();function on(){var e=new en(4);return en!=Float32Array&&(e[0]=0,e[1]=0,e[2]=0),e[3]=1,e}function ln(e,t,n,i){var a,r,s,o,l,d=t[0],h=t[1],c=t[2],f=t[3],u=n[0],_=n[1],m=n[2],g=n[3];return(r=d*u+h*_+c*m+f*g)<0&&(r=-r,u=-u,_=-_,m=-m,g=-g),1-r>Qt?(a=Math.acos(r),s=Math.sin(a),o=Math.sin((1-i)*a)/s,l=Math.sin(i*a)/s):(o=1-i,l=i),e[0]=o*d+l*u,e[1]=o*h+l*_,e[2]=o*c+l*m,e[3]=o*f+l*g,e}var dn,hn,cn,fn,un,_n,mn,gn=function(e,t){var n=t[0],i=t[1],a=t[2],r=t[3],s=n*n+i*i+a*a+r*r;return s>0&&(s=1/Math.sqrt(s)),e[0]=n*s,e[1]=i*s,e[2]=a*s,e[3]=r*s,e};dn=tn(),hn=nn(1,0,0),cn=nn(0,1,0),fn=on(),un=on(),_n=new en(9),en!=Float32Array&&(_n[1]=0,_n[2]=0,_n[3]=0,_n[5]=0,_n[6]=0,_n[7]=0),_n[0]=1,_n[4]=1,_n[8]=1,mn=_n;!function(){var e,t=(e=new en(2),en!=Float32Array&&(e[0]=0,e[1]=0),e)}();class wn{static getNumberOfComponentPerVoxel(e){try{if(e.dimension===e["space dimension"]||null!==e["space directions"][0])return 1}catch(e){return 1}return e.sizes[0]}static getNumberOfTimeSamples(e){try{if(e.dimension===e["space dimension"]||null!==e["space directions"][e["space directions"].length-1])return 1}catch(e){return 1}return e.sizes[e.sizes.length-1]}static transposeSlice(e){let t=new e.data.constructor(e.data.length);for(let n=0;n<e.height;n++)for(let i=0;i<e.width;i++){let a=n*e.width+i;t[i*e.height+n]=e.data[a]}return{width:e.height,height:e.width,ncpv:e,data:t}}static getSliceXY(e,t,n){if(n<0||n>=t.sizes[2])throw new Error(`The slice index is out of bound. Must be in [0, ${t.sizes[2]-1}]`);let i=wn.getNumberOfComponentPerVoxel(t),a=t.sizes[0]*t.sizes[1],r=i*n*a*e.BYTES_PER_ELEMENT,s=a*i,o=new e.constructor(e.buffer,r,s);return{width:t.sizes[0],height:t.sizes[1],ncpv:i,data:o}}static getSliceYX(e,t,n){return wn.transposeSlice(wn.getSliceXY(e,t,n))}static getSliceXZ(e,t,n){let i=t.sizes[0],a=t.sizes[2],r=wn.getNumberOfComponentPerVoxel(t),s=new e.constructor(i*a*r);for(let o=0;o<a;o++){let a=wn.getIndex1D(t,0,n,o)*e.BYTES_PER_ELEMENT,l=new e.constructor(e.buffer,a,i*r);s.set(l,o*i*r)}return{width:t.sizes[0],height:t.sizes[2],ncpv:r,data:s}}static getSliceZX(e,t,n){return wn.transposeSlice(wn.getSliceYZ(e,t,n))}static getSliceYZ(e,t,n){let i=t.sizes[1],a=t.sizes[2],r=wn.getNumberOfComponentPerVoxel(t),s=new e.constructor(i*a*r),o=0;if(1===r)for(let r=0;r<a;r++)for(let a=0;a<i;a++){let i=n*t.extra.stride[0]+a*t.extra.stride[1]+r*t.extra.stride[2];s[o]=e[i],o++}else for(let l=0;l<a;l++)for(let a=0;a<i;a++){let i=(n*t.extra.stride[0]+a*t.extra.stride[1]+l*t.extra.stride[2])*r*e.BYTES_PER_ELEMENT,d=new e.constructor(e.buffer,i,r);s.set(d,o),o+=r}return{width:t.sizes[1],height:t.sizes[2],ncpv:r,data:s}}static getSliceZY(e,t,n){return wn.transposeSlice(wn.getSliceYZ(e,t,n))}static getValue(e,t,n,i,a){if(n<0||n>=t.sizes[0]||i<0||i>=t.sizes[1]||a<0||a>=t.sizes[2])throw new Error("The position is out of range.");let r=wn.getNumberOfComponentPerVoxel(t),s=(n*t.extra.stride[0]+i*t.extra.stride[1]+a*t.extra.stride[2])*r;return e.slice(s,s+r)}static getIndex1D(e,t,n,i){if(t<0||t>=e.sizes[0]||n<0||n>=e.sizes[1]||i<0||i>=e.sizes[2])throw new Error("The position is out of range.");let a=wn.getNumberOfComponentPerVoxel(e);return(t*e.extra.stride[0]+n*e.extra.stride[1]+i*e.extra.stride[2])*a}static getVoxelToWorldMatrix(e){let t="space origin"in e?e["space origin"]:[0,0,0],n="space directions"in e?e["space directions"].filter(e=>null!==e):[[1,0,0],[0,1,0],[0,0,1]];var i,a,r,s,o,l,d,h,c,f,u,_,m,g,w,p,b;return i=n[0][0],a=n[0][1],r=n[0][2],s=0,o=n[1][0],l=n[1][1],d=n[1][2],h=0,c=n[2][0],f=n[2][1],u=n[2][2],_=0,m=t[0],g=t[1],w=t[2],p=1,(b=new en(16))[0]=i,b[1]=a,b[2]=r,b[3]=s,b[4]=o,b[5]=l,b[6]=d,b[7]=h,b[8]=c,b[9]=f,b[10]=u,b[11]=_,b[12]=m,b[13]=g,b[14]=w,b[15]=p,b}static getWorldToVoxelMatrix(e){let t=wn.getVoxelToWorldMatrix(e),n=(i=new en(16),en!=Float32Array&&(i[1]=0,i[2]=0,i[3]=0,i[4]=0,i[6]=0,i[7]=0,i[8]=0,i[9]=0,i[11]=0,i[12]=0,i[13]=0,i[14]=0),i[0]=1,i[5]=1,i[10]=1,i[15]=1,i);var i;return function(e,t){var n=t[0],i=t[1],a=t[2],r=t[3],s=t[4],o=t[5],l=t[6],d=t[7],h=t[8],c=t[9],f=t[10],u=t[11],_=t[12],m=t[13],g=t[14],w=t[15],p=n*o-i*s,b=n*l-a*s,k=n*d-r*s,y=i*l-a*o,x=i*d-r*o,v=a*d-r*l,E=h*m-c*_,A=h*g-f*_,z=h*w-u*_,R=c*g-f*m,U=c*w-u*m,S=f*w-u*g,Z=p*S-b*U+k*R+y*z-x*A+v*E;Z&&(Z=1/Z,e[0]=(o*S-l*U+d*R)*Z,e[1]=(a*U-i*S-r*R)*Z,e[2]=(m*v-g*x+w*y)*Z,e[3]=(f*x-c*v-u*y)*Z,e[4]=(l*z-s*S-d*A)*Z,e[5]=(n*S-a*z+r*A)*Z,e[6]=(g*k-_*v-w*b)*Z,e[7]=(h*v-f*k+u*b)*Z,e[8]=(s*U-o*z+d*E)*Z,e[9]=(i*z-n*U-r*E)*Z,e[10]=(_*x-m*k+w*p)*Z,e[11]=(c*k-h*x-u*p)*Z,e[12]=(o*A-s*R-l*E)*Z,e[13]=(n*R-i*A+a*E)*Z,e[14]=(m*b-_*y-g*p)*Z,e[15]=(h*y-c*b+f*p)*Z)}(n,t),n}static getVoxelPositionFromWorldPosition(e,t,n,i){let a=nn(t,n,i),r=wn.getWorldToVoxelMatrix(e),s=tn();return function(e,t,n){var i=t[0],a=t[1],r=t[2],s=n[3]*i+n[7]*a+n[11]*r+n[15];s=s||1,e[0]=(n[0]*i+n[4]*a+n[8]*r+n[12])/s,e[1]=(n[1]*i+n[5]*a+n[9]*r+n[13])/s,e[2]=(n[2]*i+n[6]*a+n[10]*r+n[14])/s}(s,a,r),s.map(e=>Math.round(e))}static getWorldValue(e,t,n,i,a){let r=wn.getVoxelPositionFromWorldPosition(t,n,i,a);return wn.getValue(e,t,...r)}}var pn=window,bn=pn.BlobBuilder||pn.WebKitBlobBuilder||pn.MozBlobBuilder||pn.MSBlobBuilder,kn=pn.URL||pn.webkitURL||pn.mozURL||pn.msURL,yn="application/javascript",xn="undefined"==typeof Symbol?"__t"+ +new Date:Symbol(),vn=pn.Worker,En=pn.setImmediate||function(e){return setTimeout(e,1)};function An(e,t){var n=Object.create(null);return e.onmessage=null,e.addEventListener=function(e,t){var i=n[e]||(n[e]=[]);~i.indexOf(t)||i.push(t)},e.removeEventListener=function(e,t){var i,a=n[e];a&&-1!==(i=a.indexOf(t))&&(a.splice(i,1),a.length||delete n[e])},e.postMessage=function(n){En(function(){var i=n;if(t.onmessage)try{t.onmessage({data:i,target:e})}catch(e){console.error(e)}t.emit("message",{type:"message",data:i,target:e,timeStamp:+new Date})})},e.emit=function(t,i){var a=n[t];a&&a.forEach(function(t,n){return t.call(e,i)})},e.destroy=function(){Object.keys(n).forEach(function(e){var t=n[e];t&&(t.length=0,delete n[e])}),n=null},e}if(vn){var zn,Rn=Sn("self.onmessage = function () {}"),Un=new Uint8Array(1);try{if(/(?:Trident|Edge)\/(?:[567]|12)/i.test(navigator.userAgent))throw new Error("Not available");(zn=new vn(Rn)).postMessage(Un,[Un.buffer])}catch(Zn){vn=null}finally{kn.revokeObjectURL(Rn),zn&&zn.terminate()}}function Sn(e){var t=yn;try{return kn.createObjectURL(new Blob([e],{type:t}))}catch(i){var n=new bn;return n.append(e),kn.createObjectURL(n.getBlob(t))}}var Zn,Tn,In=(Zn="worker#./parseData.worker.js",Tn=function(){return function(e,t){var n=(e,t,n,i)=>{let a=65535&e|0,r=e>>>16&65535|0,s=0;for(;0!==n;){n-=s=n>2e3?2e3:n;do{a=a+t[i++]|0,r=r+a|0}while(--s);a%=65521,r%=65521}return a|r<<16|0};const i=new Uint32Array((()=>{let e,t=[];for(var n=0;n<256;n++){e=n;for(var i=0;i<8;i++)e=1&e?3988292384^e>>>1:e>>>1;t[n]=e}return t})());var a=(e,t,n,a)=>{const r=i,s=a+n;e^=-1;for(let n=a;n<s;n++)e=e>>>8^r[255&(e^t[n])];return-1^e},r=function(e,t){let n,i,a,r,s,o,l,d,h,c,f,u,_,m,g,w,p,b,k,y,x,v,E,A;const z=e.state;n=e.next_in,E=e.input,i=n+(e.avail_in-5),a=e.next_out,A=e.output,r=a-(t-e.avail_out),s=a+(e.avail_out-257),o=z.dmax,l=z.wsize,d=z.whave,h=z.wnext,c=z.window,f=z.hold,u=z.bits,_=z.lencode,m=z.distcode,g=(1<<z.lenbits)-1,w=(1<<z.distbits)-1;e:do{u<15&&(f+=E[n++]<<u,u+=8,f+=E[n++]<<u,u+=8),p=_[f&g];t:for(;;){if(f>>>=b=p>>>24,u-=b,0==(b=p>>>16&255))A[a++]=65535&p;else{if(!(16&b)){if(0==(64&b)){p=_[(65535&p)+(f&(1<<b)-1)];continue t}if(32&b){z.mode=12;break e}e.msg="invalid literal/length code",z.mode=30;break e}k=65535&p,(b&=15)&&(u<b&&(f+=E[n++]<<u,u+=8),k+=f&(1<<b)-1,f>>>=b,u-=b),u<15&&(f+=E[n++]<<u,u+=8,f+=E[n++]<<u,u+=8),p=m[f&w];n:for(;;){if(f>>>=b=p>>>24,u-=b,!(16&(b=p>>>16&255))){if(0==(64&b)){p=m[(65535&p)+(f&(1<<b)-1)];continue n}e.msg="invalid distance code",z.mode=30;break e}if(y=65535&p,u<(b&=15)&&(f+=E[n++]<<u,(u+=8)<b&&(f+=E[n++]<<u,u+=8)),(y+=f&(1<<b)-1)>o){e.msg="invalid distance too far back",z.mode=30;break e}if(f>>>=b,u-=b,y>(b=a-r)){if((b=y-b)>d&&z.sane){e.msg="invalid distance too far back",z.mode=30;break e}if(x=0,v=c,0===h){if(x+=l-b,b<k){k-=b;do{A[a++]=c[x++]}while(--b);x=a-y,v=A}}else if(h<b){if(x+=l+h-b,(b-=h)<k){k-=b;do{A[a++]=c[x++]}while(--b);if(x=0,h<k){k-=b=h;do{A[a++]=c[x++]}while(--b);x=a-y,v=A}}}else if(x+=h-b,b<k){k-=b;do{A[a++]=c[x++]}while(--b);x=a-y,v=A}for(;k>2;)A[a++]=v[x++],A[a++]=v[x++],A[a++]=v[x++],k-=3;k&&(A[a++]=v[x++],k>1&&(A[a++]=v[x++]))}else{x=a-y;do{A[a++]=A[x++],A[a++]=A[x++],A[a++]=A[x++],k-=3}while(k>2);k&&(A[a++]=A[x++],k>1&&(A[a++]=A[x++]))}break}}break}}while(n<i&&a<s);n-=k=u>>3,f&=(1<<(u-=k<<3))-1,e.next_in=n,e.next_out=a,e.avail_in=n<i?i-n+5:5-(n-i),e.avail_out=a<s?s-a+257:257-(a-s),z.hold=f,z.bits=u};const s=new Uint16Array([3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258,0,0]),o=new Uint8Array([16,16,16,16,16,16,16,16,17,17,17,17,18,18,18,18,19,19,19,19,20,20,20,20,21,21,21,21,16,72,78]),l=new Uint16Array([1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577,0,0]),d=new Uint8Array([16,16,16,16,17,17,18,18,19,19,20,20,21,21,22,22,23,23,24,24,25,25,26,26,27,27,28,28,29,29,64,64]);var h=(e,t,n,i,a,r,h,c)=>{const f=c.bits;let u,_,m,g,w,p,b=0,k=0,y=0,x=0,v=0,E=0,A=0,z=0,R=0,U=0,S=null,Z=0;const T=new Uint16Array(16),I=new Uint16Array(16);let O,F,D,B=null,N=0;for(b=0;b<=15;b++)T[b]=0;for(k=0;k<i;k++)T[t[n+k]]++;for(v=f,x=15;x>=1&&0===T[x];x--);if(v>x&&(v=x),0===x)return a[r++]=20971520,a[r++]=20971520,c.bits=1,0;for(y=1;y<x&&0===T[y];y++);for(v<y&&(v=y),z=1,b=1;b<=15;b++)if(z<<=1,(z-=T[b])<0)return-1;if(z>0&&(0===e||1!==x))return-1;for(I[1]=0,b=1;b<15;b++)I[b+1]=I[b]+T[b];for(k=0;k<i;k++)0!==t[n+k]&&(h[I[t[n+k]]++]=k);if(0===e?(S=B=h,p=19):1===e?(S=s,Z-=257,B=o,N-=257,p=256):(S=l,B=d,p=-1),U=0,k=0,b=y,w=r,E=v,A=0,m=-1,g=(R=1<<v)-1,1===e&&R>852||2===e&&R>592)return 1;for(;;){O=b-A,h[k]<p?(F=0,D=h[k]):h[k]>p?(F=B[N+h[k]],D=S[Z+h[k]]):(F=96,D=0),u=1<<b-A,y=_=1<<E;do{a[w+(U>>A)+(_-=u)]=O<<24|F<<16|D|0}while(0!==_);for(u=1<<b-1;U&u;)u>>=1;if(0!==u?(U&=u-1,U+=u):U=0,k++,0==--T[b]){if(b===x)break;b=t[n+h[k]]}if(b>v&&(U&g)!==m){for(0===A&&(A=v),w+=y,z=1<<(E=b-A);E+A<x&&!((z-=T[E+A])<=0);)E++,z<<=1;if(R+=1<<E,1===e&&R>852||2===e&&R>592)return 1;a[m=U&g]=v<<24|E<<16|w-r|0}}return 0!==U&&(a[w+U]=b-A<<24|64<<16|0),c.bits=v,0},c={Z_NO_FLUSH:0,Z_PARTIAL_FLUSH:1,Z_SYNC_FLUSH:2,Z_FULL_FLUSH:3,Z_FINISH:4,Z_BLOCK:5,Z_TREES:6,Z_OK:0,Z_STREAM_END:1,Z_NEED_DICT:2,Z_ERRNO:-1,Z_STREAM_ERROR:-2,Z_DATA_ERROR:-3,Z_MEM_ERROR:-4,Z_BUF_ERROR:-5,Z_NO_COMPRESSION:0,Z_BEST_SPEED:1,Z_BEST_COMPRESSION:9,Z_DEFAULT_COMPRESSION:-1,Z_FILTERED:1,Z_HUFFMAN_ONLY:2,Z_RLE:3,Z_FIXED:4,Z_DEFAULT_STRATEGY:0,Z_BINARY:0,Z_TEXT:1,Z_UNKNOWN:2,Z_DEFLATED:8};const{Z_FINISH:f,Z_BLOCK:u,Z_TREES:_,Z_OK:m,Z_STREAM_END:g,Z_NEED_DICT:w,Z_STREAM_ERROR:p,Z_DATA_ERROR:b,Z_MEM_ERROR:k,Z_BUF_ERROR:y,Z_DEFLATED:x}=c,v=e=>(e>>>24&255)+(e>>>8&65280)+((65280&e)<<8)+((255&e)<<24);function E(){this.mode=0,this.last=!1,this.wrap=0,this.havedict=!1,this.flags=0,this.dmax=0,this.check=0,this.total=0,this.head=null,this.wbits=0,this.wsize=0,this.whave=0,this.wnext=0,this.window=null,this.hold=0,this.bits=0,this.length=0,this.offset=0,this.extra=0,this.lencode=null,this.distcode=null,this.lenbits=0,this.distbits=0,this.ncode=0,this.nlen=0,this.ndist=0,this.have=0,this.next=null,this.lens=new Uint16Array(320),this.work=new Uint16Array(288),this.lendyn=null,this.distdyn=null,this.sane=0,this.back=0,this.was=0}const A=e=>{if(!e||!e.state)return p;const t=e.state;return e.total_in=e.total_out=t.total=0,e.msg="",t.wrap&&(e.adler=1&t.wrap),t.mode=1,t.last=0,t.havedict=0,t.dmax=32768,t.head=null,t.hold=0,t.bits=0,t.lencode=t.lendyn=new Int32Array(852),t.distcode=t.distdyn=new Int32Array(592),t.sane=1,t.back=-1,m},z=e=>{if(!e||!e.state)return p;const t=e.state;return t.wsize=0,t.whave=0,t.wnext=0,A(e)},R=(e,t)=>{let n;if(!e||!e.state)return p;const i=e.state;return t<0?(n=0,t=-t):(n=1+(t>>4),t<48&&(t&=15)),t&&(t<8||t>15)?p:(null!==i.window&&i.wbits!==t&&(i.window=null),i.wrap=n,i.wbits=t,z(e))},U=(e,t)=>{if(!e)return p;const n=new E;e.state=n,n.window=null;const i=R(e,t);return i!==m&&(e.state=null),i};let S,Z,T=!0;const I=e=>{if(T){S=new Int32Array(512),Z=new Int32Array(32);let t=0;for(;t<144;)e.lens[t++]=8;for(;t<256;)e.lens[t++]=9;for(;t<280;)e.lens[t++]=7;for(;t<288;)e.lens[t++]=8;for(h(1,e.lens,0,288,S,0,e.work,{bits:9}),t=0;t<32;)e.lens[t++]=5;h(2,e.lens,0,32,Z,0,e.work,{bits:5}),T=!1}e.lencode=S,e.lenbits=9,e.distcode=Z,e.distbits=5},O=(e,t,n,i)=>{let a;const r=e.state;return null===r.window&&(r.wsize=1<<r.wbits,r.wnext=0,r.whave=0,r.window=new Uint8Array(r.wsize)),i>=r.wsize?(r.window.set(t.subarray(n-r.wsize,n),0),r.wnext=0,r.whave=r.wsize):((a=r.wsize-r.wnext)>i&&(a=i),r.window.set(t.subarray(n-i,n-i+a),r.wnext),(i-=a)?(r.window.set(t.subarray(n-i,n),0),r.wnext=i,r.whave=r.wsize):(r.wnext+=a,r.wnext===r.wsize&&(r.wnext=0),r.whave<r.wsize&&(r.whave+=a))),0};var F={inflateReset:z,inflateReset2:R,inflateResetKeep:A,inflateInit:e=>U(e,15),inflateInit2:U,inflate:(e,t)=>{let i,s,o,l,d,c,E,A,z,R,U,S,Z,T,F,D,B,N,L,C,M,P,j=0;const H=new Uint8Array(4);let Y,K;const V=new Uint8Array([16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15]);if(!e||!e.state||!e.output||!e.input&&0!==e.avail_in)return p;12===(i=e.state).mode&&(i.mode=13),d=e.next_out,o=e.output,E=e.avail_out,l=e.next_in,s=e.input,c=e.avail_in,A=i.hold,z=i.bits,R=c,U=E,P=m;e:for(;;)switch(i.mode){case 1:if(0===i.wrap){i.mode=13;break}for(;z<16;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(2&i.wrap&&35615===A){i.check=0,H[0]=255&A,H[1]=A>>>8&255,i.check=a(i.check,H,2,0),A=0,z=0,i.mode=2;break}if(i.flags=0,i.head&&(i.head.done=!1),!(1&i.wrap)||(((255&A)<<8)+(A>>8))%31){e.msg="incorrect header check",i.mode=30;break}if((15&A)!==x){e.msg="unknown compression method",i.mode=30;break}if(z-=4,M=8+(15&(A>>>=4)),0===i.wbits)i.wbits=M;else if(M>i.wbits){e.msg="invalid window size",i.mode=30;break}i.dmax=1<<i.wbits,e.adler=i.check=1,i.mode=512&A?10:12,A=0,z=0;break;case 2:for(;z<16;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(i.flags=A,(255&i.flags)!==x){e.msg="unknown compression method",i.mode=30;break}if(57344&i.flags){e.msg="unknown header flags set",i.mode=30;break}i.head&&(i.head.text=A>>8&1),512&i.flags&&(H[0]=255&A,H[1]=A>>>8&255,i.check=a(i.check,H,2,0)),A=0,z=0,i.mode=3;case 3:for(;z<32;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}i.head&&(i.head.time=A),512&i.flags&&(H[0]=255&A,H[1]=A>>>8&255,H[2]=A>>>16&255,H[3]=A>>>24&255,i.check=a(i.check,H,4,0)),A=0,z=0,i.mode=4;case 4:for(;z<16;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}i.head&&(i.head.xflags=255&A,i.head.os=A>>8),512&i.flags&&(H[0]=255&A,H[1]=A>>>8&255,i.check=a(i.check,H,2,0)),A=0,z=0,i.mode=5;case 5:if(1024&i.flags){for(;z<16;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}i.length=A,i.head&&(i.head.extra_len=A),512&i.flags&&(H[0]=255&A,H[1]=A>>>8&255,i.check=a(i.check,H,2,0)),A=0,z=0}else i.head&&(i.head.extra=null);i.mode=6;case 6:if(1024&i.flags&&((S=i.length)>c&&(S=c),S&&(i.head&&(M=i.head.extra_len-i.length,i.head.extra||(i.head.extra=new Uint8Array(i.head.extra_len)),i.head.extra.set(s.subarray(l,l+S),M)),512&i.flags&&(i.check=a(i.check,s,S,l)),c-=S,l+=S,i.length-=S),i.length))break e;i.length=0,i.mode=7;case 7:if(2048&i.flags){if(0===c)break e;S=0;do{M=s[l+S++],i.head&&M&&i.length<65536&&(i.head.name+=String.fromCharCode(M))}while(M&&S<c);if(512&i.flags&&(i.check=a(i.check,s,S,l)),c-=S,l+=S,M)break e}else i.head&&(i.head.name=null);i.length=0,i.mode=8;case 8:if(4096&i.flags){if(0===c)break e;S=0;do{M=s[l+S++],i.head&&M&&i.length<65536&&(i.head.comment+=String.fromCharCode(M))}while(M&&S<c);if(512&i.flags&&(i.check=a(i.check,s,S,l)),c-=S,l+=S,M)break e}else i.head&&(i.head.comment=null);i.mode=9;case 9:if(512&i.flags){for(;z<16;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(A!==(65535&i.check)){e.msg="header crc mismatch",i.mode=30;break}A=0,z=0}i.head&&(i.head.hcrc=i.flags>>9&1,i.head.done=!0),e.adler=i.check=0,i.mode=12;break;case 10:for(;z<32;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}e.adler=i.check=v(A),A=0,z=0,i.mode=11;case 11:if(0===i.havedict)return e.next_out=d,e.avail_out=E,e.next_in=l,e.avail_in=c,i.hold=A,i.bits=z,w;e.adler=i.check=1,i.mode=12;case 12:if(t===u||t===_)break e;case 13:if(i.last){A>>>=7&z,z-=7&z,i.mode=27;break}for(;z<3;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}switch(i.last=1&A,z-=1,3&(A>>>=1)){case 0:i.mode=14;break;case 1:if(I(i),i.mode=20,t===_){A>>>=2,z-=2;break e}break;case 2:i.mode=17;break;case 3:e.msg="invalid block type",i.mode=30}A>>>=2,z-=2;break;case 14:for(A>>>=7&z,z-=7&z;z<32;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if((65535&A)!=(A>>>16^65535)){e.msg="invalid stored block lengths",i.mode=30;break}if(i.length=65535&A,A=0,z=0,i.mode=15,t===_)break e;case 15:i.mode=16;case 16:if(S=i.length){if(S>c&&(S=c),S>E&&(S=E),0===S)break e;o.set(s.subarray(l,l+S),d),c-=S,l+=S,E-=S,d+=S,i.length-=S;break}i.mode=12;break;case 17:for(;z<14;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(i.nlen=257+(31&A),A>>>=5,z-=5,i.ndist=1+(31&A),A>>>=5,z-=5,i.ncode=4+(15&A),A>>>=4,z-=4,i.nlen>286||i.ndist>30){e.msg="too many length or distance symbols",i.mode=30;break}i.have=0,i.mode=18;case 18:for(;i.have<i.ncode;){for(;z<3;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}i.lens[V[i.have++]]=7&A,A>>>=3,z-=3}for(;i.have<19;)i.lens[V[i.have++]]=0;if(i.lencode=i.lendyn,i.lenbits=7,Y={bits:i.lenbits},P=h(0,i.lens,0,19,i.lencode,0,i.work,Y),i.lenbits=Y.bits,P){e.msg="invalid code lengths set",i.mode=30;break}i.have=0,i.mode=19;case 19:for(;i.have<i.nlen+i.ndist;){for(;j=i.lencode[A&(1<<i.lenbits)-1],D=j>>>16&255,B=65535&j,!((F=j>>>24)<=z);){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(B<16)A>>>=F,z-=F,i.lens[i.have++]=B;else{if(16===B){for(K=F+2;z<K;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(A>>>=F,z-=F,0===i.have){e.msg="invalid bit length repeat",i.mode=30;break}M=i.lens[i.have-1],S=3+(3&A),A>>>=2,z-=2}else if(17===B){for(K=F+3;z<K;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}z-=F,M=0,S=3+(7&(A>>>=F)),A>>>=3,z-=3}else{for(K=F+7;z<K;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}z-=F,M=0,S=11+(127&(A>>>=F)),A>>>=7,z-=7}if(i.have+S>i.nlen+i.ndist){e.msg="invalid bit length repeat",i.mode=30;break}for(;S--;)i.lens[i.have++]=M}}if(30===i.mode)break;if(0===i.lens[256]){e.msg="invalid code -- missing end-of-block",i.mode=30;break}if(i.lenbits=9,Y={bits:i.lenbits},P=h(1,i.lens,0,i.nlen,i.lencode,0,i.work,Y),i.lenbits=Y.bits,P){e.msg="invalid literal/lengths set",i.mode=30;break}if(i.distbits=6,i.distcode=i.distdyn,Y={bits:i.distbits},P=h(2,i.lens,i.nlen,i.ndist,i.distcode,0,i.work,Y),i.distbits=Y.bits,P){e.msg="invalid distances set",i.mode=30;break}if(i.mode=20,t===_)break e;case 20:i.mode=21;case 21:if(c>=6&&E>=258){e.next_out=d,e.avail_out=E,e.next_in=l,e.avail_in=c,i.hold=A,i.bits=z,r(e,U),d=e.next_out,o=e.output,E=e.avail_out,l=e.next_in,s=e.input,c=e.avail_in,A=i.hold,z=i.bits,12===i.mode&&(i.back=-1);break}for(i.back=0;j=i.lencode[A&(1<<i.lenbits)-1],D=j>>>16&255,B=65535&j,!((F=j>>>24)<=z);){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(D&&0==(240&D)){for(N=F,L=D,C=B;j=i.lencode[C+((A&(1<<N+L)-1)>>N)],D=j>>>16&255,B=65535&j,!(N+(F=j>>>24)<=z);){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}A>>>=N,z-=N,i.back+=N}if(A>>>=F,z-=F,i.back+=F,i.length=B,0===D){i.mode=26;break}if(32&D){i.back=-1,i.mode=12;break}if(64&D){e.msg="invalid literal/length code",i.mode=30;break}i.extra=15&D,i.mode=22;case 22:if(i.extra){for(K=i.extra;z<K;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}i.length+=A&(1<<i.extra)-1,A>>>=i.extra,z-=i.extra,i.back+=i.extra}i.was=i.length,i.mode=23;case 23:for(;j=i.distcode[A&(1<<i.distbits)-1],D=j>>>16&255,B=65535&j,!((F=j>>>24)<=z);){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(0==(240&D)){for(N=F,L=D,C=B;j=i.distcode[C+((A&(1<<N+L)-1)>>N)],D=j>>>16&255,B=65535&j,!(N+(F=j>>>24)<=z);){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}A>>>=N,z-=N,i.back+=N}if(A>>>=F,z-=F,i.back+=F,64&D){e.msg="invalid distance code",i.mode=30;break}i.offset=B,i.extra=15&D,i.mode=24;case 24:if(i.extra){for(K=i.extra;z<K;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}i.offset+=A&(1<<i.extra)-1,A>>>=i.extra,z-=i.extra,i.back+=i.extra}if(i.offset>i.dmax){e.msg="invalid distance too far back",i.mode=30;break}i.mode=25;case 25:if(0===E)break e;if(S=U-E,i.offset>S){if((S=i.offset-S)>i.whave&&i.sane){e.msg="invalid distance too far back",i.mode=30;break}S>i.wnext?(S-=i.wnext,Z=i.wsize-S):Z=i.wnext-S,S>i.length&&(S=i.length),T=i.window}else T=o,Z=d-i.offset,S=i.length;S>E&&(S=E),E-=S,i.length-=S;do{o[d++]=T[Z++]}while(--S);0===i.length&&(i.mode=21);break;case 26:if(0===E)break e;o[d++]=i.length,E--,i.mode=21;break;case 27:if(i.wrap){for(;z<32;){if(0===c)break e;c--,A|=s[l++]<<z,z+=8}if(U-=E,e.total_out+=U,i.total+=U,U&&(e.adler=i.check=i.flags?a(i.check,o,U,d-U):n(i.check,o,U,d-U)),U=E,(i.flags?A:v(A))!==i.check){e.msg="incorrect data check",i.mode=30;break}A=0,z=0}i.mode=28;case 28:if(i.wrap&&i.flags){for(;z<32;){if(0===c)break e;c--,A+=s[l++]<<z,z+=8}if(A!==(4294967295&i.total)){e.msg="incorrect length check",i.mode=30;break}A=0,z=0}i.mode=29;case 29:P=g;break e;case 30:P=b;break e;case 31:return k;case 32:default:return p}return e.next_out=d,e.avail_out=E,e.next_in=l,e.avail_in=c,i.hold=A,i.bits=z,(i.wsize||U!==e.avail_out&&i.mode<30&&(i.mode<27||t!==f))&&O(e,e.output,e.next_out,U-e.avail_out),R-=e.avail_in,U-=e.avail_out,e.total_in+=R,e.total_out+=U,i.total+=U,i.wrap&&U&&(e.adler=i.check=i.flags?a(i.check,o,U,e.next_out-U):n(i.check,o,U,e.next_out-U)),e.data_type=i.bits+(i.last?64:0)+(12===i.mode?128:0)+(20===i.mode||15===i.mode?256:0),(0===R&&0===U||t===f)&&P===m&&(P=y),P},inflateEnd:e=>{if(!e||!e.state)return p;let t=e.state;return t.window&&(t.window=null),e.state=null,m},inflateGetHeader:(e,t)=>{if(!e||!e.state)return p;const n=e.state;return 0==(2&n.wrap)?p:(n.head=t,t.done=!1,m)},inflateSetDictionary:(e,t)=>{const i=t.length;let a,r,s;return e&&e.state?0!==(a=e.state).wrap&&11!==a.mode?p:11===a.mode&&(r=n(r=1,t,i,0))!==a.check?b:(s=O(e,t,i,i))?(a.mode=31,k):(a.havedict=1,m):p},inflateInfo:"pako inflate (from Nodeca project)"};const D=(e,t)=>Object.prototype.hasOwnProperty.call(e,t);var B={assign:function(e){const t=Array.prototype.slice.call(arguments,1);for(;t.length;){const n=t.shift();if(n){if("object"!=typeof n)throw new TypeError(n+"must be non-object");for(const t in n)D(n,t)&&(e[t]=n[t])}}return e},flattenChunks:e=>{let t=0;for(let n=0,i=e.length;n<i;n++)t+=e[n].length;const n=new Uint8Array(t);for(let t=0,i=0,a=e.length;t<a;t++){let a=e[t];n.set(a,i),i+=a.length}return n}};let N=!0;try{String.fromCharCode.apply(null,new Uint8Array(1))}catch(e){N=!1}const L=new Uint8Array(256);for(let e=0;e<256;e++)L[e]=e>=252?6:e>=248?5:e>=240?4:e>=224?3:e>=192?2:1;L[254]=L[254]=1;var C={string2buf:e=>{if("function"==typeof TextEncoder&&TextEncoder.prototype.encode)return(new TextEncoder).encode(e);let t,n,i,a,r,s=e.length,o=0;for(a=0;a<s;a++)55296==(64512&(n=e.charCodeAt(a)))&&a+1<s&&56320==(64512&(i=e.charCodeAt(a+1)))&&(n=65536+(n-55296<<10)+(i-56320),a++),o+=n<128?1:n<2048?2:n<65536?3:4;for(t=new Uint8Array(o),r=0,a=0;r<o;a++)55296==(64512&(n=e.charCodeAt(a)))&&a+1<s&&56320==(64512&(i=e.charCodeAt(a+1)))&&(n=65536+(n-55296<<10)+(i-56320),a++),n<128?t[r++]=n:n<2048?(t[r++]=192|n>>>6,t[r++]=128|63&n):n<65536?(t[r++]=224|n>>>12,t[r++]=128|n>>>6&63,t[r++]=128|63&n):(t[r++]=240|n>>>18,t[r++]=128|n>>>12&63,t[r++]=128|n>>>6&63,t[r++]=128|63&n);return t},buf2string:(e,t)=>{const n=t||e.length;if("function"==typeof TextDecoder&&TextDecoder.prototype.decode)return(new TextDecoder).decode(e.subarray(0,t));let i,a;const r=new Array(2*n);for(a=0,i=0;i<n;){let t=e[i++];if(t<128){r[a++]=t;continue}let s=L[t];if(s>4)r[a++]=65533,i+=s-1;else{for(t&=2===s?31:3===s?15:7;s>1&&i<n;)t=t<<6|63&e[i++],s--;s>1?r[a++]=65533:t<65536?r[a++]=t:(t-=65536,r[a++]=55296|t>>10&1023,r[a++]=56320|1023&t)}}return((e,t)=>{if(t<65534&&e.subarray&&N)return String.fromCharCode.apply(null,e.length===t?e:e.subarray(0,t));let n="";for(let i=0;i<t;i++)n+=String.fromCharCode(e[i]);return n})(r,a)},utf8border:(e,t)=>{(t=t||e.length)>e.length&&(t=e.length);let n=t-1;for(;n>=0&&128==(192&e[n]);)n--;return n<0?t:0===n?t:n+L[e[n]]>t?n:t}},M={2:"need dictionary",1:"stream end",0:"","-1":"file error","-2":"stream error","-3":"data error","-4":"insufficient memory","-5":"buffer error","-6":"incompatible version"},P=function(){this.input=null,this.next_in=0,this.avail_in=0,this.total_in=0,this.output=null,this.next_out=0,this.avail_out=0,this.total_out=0,this.msg="",this.state=null,this.data_type=2,this.adler=0},j=function(){this.text=0,this.time=0,this.xflags=0,this.os=0,this.extra=null,this.extra_len=0,this.name="",this.comment="",this.hcrc=0,this.done=!1};const H=Object.prototype.toString,{Z_NO_FLUSH:Y,Z_FINISH:K,Z_OK:V,Z_STREAM_END:W,Z_NEED_DICT:X,Z_STREAM_ERROR:G,Z_DATA_ERROR:$,Z_MEM_ERROR:q}=c;function J(e){this.options=B.assign({chunkSize:65536,windowBits:15,to:""},e||{});const t=this.options;t.raw&&t.windowBits>=0&&t.windowBits<16&&(t.windowBits=-t.windowBits,0===t.windowBits&&(t.windowBits=-15)),!(t.windowBits>=0&&t.windowBits<16)||e&&e.windowBits||(t.windowBits+=32),t.windowBits>15&&t.windowBits<48&&0==(15&t.windowBits)&&(t.windowBits|=15),this.err=0,this.msg="",this.ended=!1,this.chunks=[],this.strm=new P,this.strm.avail_out=0;let n=F.inflateInit2(this.strm,t.windowBits);if(n!==V)throw new Error(M[n]);if(this.header=new j,F.inflateGetHeader(this.strm,this.header),t.dictionary&&("string"==typeof t.dictionary?t.dictionary=C.string2buf(t.dictionary):"[object ArrayBuffer]"===H.call(t.dictionary)&&(t.dictionary=new Uint8Array(t.dictionary)),t.raw&&(n=F.inflateSetDictionary(this.strm,t.dictionary))!==V))throw new Error(M[n])}J.prototype.push=function(e,t){const n=this.strm,i=this.options.chunkSize,a=this.options.dictionary;let r,s,o;if(this.ended)return!1;for(s=t===~~t?t:!0===t?K:Y,"[object ArrayBuffer]"===H.call(e)?n.input=new Uint8Array(e):n.input=e,n.next_in=0,n.avail_in=n.input.length;;){for(0===n.avail_out&&(n.output=new Uint8Array(i),n.next_out=0,n.avail_out=i),(r=F.inflate(n,s))===X&&a&&((r=F.inflateSetDictionary(n,a))===V?r=F.inflate(n,s):r===$&&(r=X));n.avail_in>0&&r===W&&n.state.wrap>0&&0!==e[n.next_in];)F.inflateReset(n),r=F.inflate(n,s);switch(r){case G:case $:case X:case q:return this.onEnd(r),this.ended=!0,!1}if(o=n.avail_out,n.next_out&&(0===n.avail_out||r===W))if("string"===this.options.to){let e=C.utf8border(n.output,n.next_out),t=n.next_out-e,a=C.buf2string(n.output,e);n.next_out=t,n.avail_out=i-t,t&&n.output.set(n.output.subarray(e,e+t),0),this.onData(a)}else this.onData(n.output.length===n.next_out?n.output:n.output.subarray(0,n.next_out));if(r!==V||0!==o){if(r===W)return r=F.inflateEnd(this.strm),this.onEnd(r),this.ended=!0,!0;if(0===n.avail_in)break}}return!0},J.prototype.onData=function(e){this.chunks.push(e)},J.prototype.onEnd=function(e){e===V&&("string"===this.options.to?this.result=this.chunks.join(""):this.result=B.flattenChunks(this.chunks)),this.chunks=[],this.err=e,this.msg=this.strm.msg},e.exports=function(e){e.addEventListener("message",t=>{const n=t.data;try{const t=function(e,t){const n=new J(t);if(n.push(e),n.err)throw n.msg||M[n.err];return n.result}(n).buffer;e.postMessage(t,[t])}catch(t){e.postMessage(new Error("The buffer cannot be inflated."))}})}}(e={exports:{}}),e.exports;var e},function e(t){var n=this;if(!(n instanceof e))return new e(t);if(!Tn)return new vn(Zn);if(vn&&!t){var i=Sn(';(function(f){f&&new(f.default?f["default"]:f)(self)}(('+Tn.toString()+")()))"),a=new vn(i);return kn.revokeObjectURL(i),n[xn]=a}var r=new An({close:function(){this.destroy()}},n);Object.assign(new An(n,r),{isThisThread:!0,terminate:function(){r.close(),this.destroy()}}),Tn().call(r,r)});e.parse=function(e,t={}){if("NRRD000"!==String.fromCharCode.apply(null,new Uint8Array(e,0,"NRRD000".length)))throw new Error("This file is not a NRRD file");let{header:n,dataByteOffset:i}=function(e){let t=[],n=null,i=new DataView(e);for(let a=0;a<e.byteLength;a++)if(t.push(String.fromCharCode(i.getUint8(a))),a>0&&"\n"===t[a-1]&&"\n"===t[a]){n=a+1;break}if(null===n)throw new Error("The NRRD header is corrupted.");let a=[],r=t.join("").trim().split(/\r\n|\n/).map(e=>e.trim()).slice(1).filter(e=>e.length>0).filter(e=>("#"===e[0]&&a.push(e.slice(1).trim()),"#"!==e[0])).map(e=>{let t=e.split(":");return{key:t[0].trim(),val:t[1].trim()}}),s={};if(r.forEach(e=>{s[e.key]=e.val}),s.sizes&&(s.sizes=s.sizes.split(/\s+/).map(e=>parseInt(e))),s["space dimension"]&&(s["space dimension"]=parseInt(s["space dimension"])),s.space&&(s["space dimension"]=qt[s.space.toLowerCase()]),s.dimension&&(s.dimension=parseInt(s.dimension)),s["space directions"]&&(s["space directions"]=s["space directions"].split(/\s+/).map(e=>"none"===e.trim()?null:e.slice(1,e.length-1).split(",").map(e=>parseFloat(e))),s["space directions"].length!==s.dimension))throw new Error('"space direction" property has to contain as many elements as dimensions. Non-spatial dimesnsions must be refered as "none". See http://teem.sourceforge.net/nrrd/format.html#spacedirections for more info.');if(s["space units"]&&(s["space units"]=s["space units"].split(/\s+/)),s["space origin"]&&(s["space origin"]=s["space origin"].slice(1,s["space origin"].length-1).split(",").map(e=>parseFloat(e))),s["measurement frame"]&&(s["measurement frame"]=s["measurement frame"].split(/\s+/).map(e=>"none"===e.trim()?null:e.slice(1,e.length-1).split(",").map(e=>parseFloat(e)))),s.kinds){if(s.kinds=s.kinds.split(/\s+/),s.kinds.length!==s.sizes.length)throw new Error('The "kinds" property is expected to have has many elements as the "size" property.');s.kinds.forEach((e,t)=>{let n=Jt[e.toLowerCase()],i=s.sizes[t];if(null!==n&&n!==i)throw new Error(`The kind "${e}" expect a size of ${n} but ${i} found`)})}s.min&&(s.min=parseFloat(s.min)),s.max&&(s.max=parseFloat(s.max)),s["old min"]&&(s["old min"]=parseFloat(s["old min"])),s["old max"]&&(s["old max"]=parseFloat(s["old max"])),s.spacings&&(s.spacings=s.spacings.split(/\s+/).map(e=>parseFloat(e))),s.thicknesses&&(s.thicknesses=s.thicknesses.split(/\s+/).map(e=>parseFloat(e))),s["axis mins"]&&(s["axis mins"]=s["axis mins"].split(/\s+/).map(e=>parseFloat(e))),s.axismins&&(s.axismins=s.axismins.split(/\s+/).map(e=>parseFloat(e))),s["axis maxs"]&&(s["axis maxs"]=s["axis maxs"].split(/\s+/).map(e=>parseFloat(e))),s.axismaxs&&(s.axismaxs=s.axismaxs.split(/\s+/).map(e=>parseFloat(e))),s.centers&&(s.centers=s.centers.split(/\s+/).map(e=>"cell"===e||"node"===e?e:null)),s.labels&&(s.labels=s.labels.split(/\s+/)),s.extra={},s.extra.comments=a,s.extra.stride=[1];for(let e=1;e<s.sizes.length;e++)s.extra.stride.push(s.extra.stride[e-1]*s.sizes[e-1]);return{header:s,dataByteOffset:n}}(e);if("headerOnly"in t&&t.headerOnly)return{header:n,data:null};let a=function(e,t,n){let i=null,a=Gt[t.type],r=t.sizes.reduce((e,t)=>e*t),s=1/0,o=-1/0,l=null,d="ascii"===t.encoding||"txt"===t.encoding||"text"===t.encoding;if("raw"===t.encoding)i=e.slice(n);else if(d){let t=String.fromCharCode.apply(null,new Uint8Array(e,n)).split(/\r\n|\n|\s/).map(e=>e.trim()).filter(e=>""!==e).map(e=>{let t=parseFloat(e);return s=Math.min(s,t),o=Math.max(o,t),t});l=new a(t)}else{if("gzip"!==t.encoding&&"gz"!==t.encoding)throw new Error('Only "raw", "ascii" and "gzip" encoding are supported.');i=Xt.inflate(e.slice(n)).buffer}if(d){if(r!==l.length)throw new Error("Unconsistency in data buffer length")}else{let e=i.byteLength/a.BYTES_PER_ELEMENT;if(r!==e)throw new Error("Unconsistency in data buffer length");l=new a(r);let n=new DataView(i),d=$t[t.type],h="little"===t.endian;for(let e=0;e<r;e++)l[e]=n[d](e*a.BYTES_PER_ELEMENT,h),s=Math.min(s,l[e]),o=Math.max(o,l[e])}return t.extra.min=s,t.extra.max=o,l}(e,n,i);return{header:n,data:a}},e.Toolbox=wn,e.parseAsync=async function(e,t={}){if("NRRD000"!==String.fromCharCode.apply(null,new Uint8Array(e,0,"NRRD000".length)))throw new Error("This file is not a NRRD file");let{header:n,dataByteOffset:i}=function(e){let t=[],n=null,i=new DataView(e);for(let a=0;a<e.byteLength;a++)if(t.push(String.fromCharCode(i.getUint8(a))),a>0&&"\n"===t[a-1]&&"\n"===t[a]){n=a+1;break}if(null===n)throw new Error("The NRRD header is corrupted.");let a=[],r=t.join("").trim().split(/\r\n|\n/).map(e=>e.trim()).slice(1).filter(e=>e.length>0).filter(e=>("#"===e[0]&&a.push(e.slice(1).trim()),"#"!==e[0])).map(e=>{let t=e.split(":");return{key:t[0].trim(),val:t[1].trim()}}),s={};if(r.forEach(e=>{s[e.key]=e.val}),s.sizes&&(s.sizes=s.sizes.split(/\s+/).map(e=>parseInt(e))),s["space dimension"]&&(s["space dimension"]=parseInt(s["space dimension"])),s.space&&(s["space dimension"]=qt[s.space.toLowerCase()]),s.dimension&&(s.dimension=parseInt(s.dimension)),s["space directions"]&&(s["space directions"]=s["space directions"].split(/\s+/).map(e=>"none"===e.trim()?null:e.slice(1,e.length-1).split(",").map(e=>parseFloat(e))),s["space directions"].length!==s.dimension))throw new Error('"space direction" property has to contain as many elements as dimensions. Non-spatial dimesnsions must be refered as "none". See http://teem.sourceforge.net/nrrd/format.html#spacedirections for more info.');if(s["space units"]&&(s["space units"]=s["space units"].split(/\s+/)),s["space origin"]&&(s["space origin"]=s["space origin"].slice(1,s["space origin"].length-1).split(",").map(e=>parseFloat(e))),s["measurement frame"]&&(s["measurement frame"]=s["measurement frame"].split(/\s+/).map(e=>"none"===e.trim()?null:e.slice(1,e.length-1).split(",").map(e=>parseFloat(e)))),s.kinds){if(s.kinds=s.kinds.split(/\s+/),s.kinds.length!==s.sizes.length)throw new Error('The "kinds" property is expected to have has many elements as the "size" property.');s.kinds.forEach((e,t)=>{let n=Jt[e.toLowerCase()],i=s.sizes[t];if(null!==n&&n!==i)throw new Error(`The kind "${e}" expect a size of ${n} but ${i} found`)})}s.min&&(s.min=parseFloat(s.min)),s.max&&(s.max=parseFloat(s.max)),s["old min"]&&(s["old min"]=parseFloat(s["old min"])),s["old max"]&&(s["old max"]=parseFloat(s["old max"])),s.spacings&&(s.spacings=s.spacings.split(/\s+/).map(e=>parseFloat(e))),s.thicknesses&&(s.thicknesses=s.thicknesses.split(/\s+/).map(e=>parseFloat(e))),s["axis mins"]&&(s["axis mins"]=s["axis mins"].split(/\s+/).map(e=>parseFloat(e))),s.axismins&&(s.axismins=s.axismins.split(/\s+/).map(e=>parseFloat(e))),s["axis maxs"]&&(s["axis maxs"]=s["axis maxs"].split(/\s+/).map(e=>parseFloat(e))),s.axismaxs&&(s.axismaxs=s.axismaxs.split(/\s+/).map(e=>parseFloat(e))),s.centers&&(s.centers=s.centers.split(/\s+/).map(e=>"cell"===e||"node"===e?e:null)),s.labels&&(s.labels=s.labels.split(/\s+/)),s.extra={},s.extra.comments=a,s.extra.stride=[1];for(let e=1;e<s.sizes.length;e++)s.extra.stride.push(s.extra.stride[e-1]*s.sizes[e-1]);return{header:s,dataByteOffset:n}}(e);if("headerOnly"in t&&t.headerOnly)return{header:n,data:null};let a=await async function(e,t,n){let i=null;const a=Gt[t.type],r=t.sizes.reduce((e,t)=>e*t);let s=1/0,o=-1/0,l=null;const d="ascii"===t.encoding||"txt"===t.encoding||"text"===t.encoding;if("raw"===t.encoding)i=e.slice(n);else if(d){const t=String.fromCharCode.apply(null,new Uint8Array(e,n)).split(/\r\n|\n|\s/).map(e=>e.trim()).filter(e=>""!==e).map(e=>{const t=parseFloat(e);return s=Math.min(s,t),o=Math.max(o,t),t});l=new a(t)}else{if("gzip"!==t.encoding&&"gz"!==t.encoding)throw new Error('Only "raw", "ascii" and "gzip" encoding are supported.');i=await(h=e.slice(n),new Promise((e,t)=>{const n=new In;n.addEventListener("message",n=>{n.data instanceof Error?t(n.data):e(n.data)}),n.postMessage(h,[h])}))}var h;if(d){if(r!==l.length)throw new Error("Unconsistency in data buffer length")}else{const e=i.byteLength/a.BYTES_PER_ELEMENT;if(r!==e)throw new Error("Unconsistency in data buffer length");l=new a(r);const n=new DataView(i),d=$t[t.type],h="little"===t.endian;for(let e=0;e<r;e+=1)l[e]=n[d](e*a.BYTES_PER_ELEMENT,h),s=Math.min(s,l[e]),o=Math.max(o,l[e])}return t.extra.min=s,t.extra.max=o,l}(e,n,i);return{header:n,data:a}},Object.defineProperty(e,"__esModule",{value:!0})});
+    /*  head: air skin skull brain     
+        0.00415
+        0.00634
+        0.00537
+        0.00586
+        0.00000
+        0.00757
+        0.00317
+        0.00146
+        0.02124
+        0.06031
+        0.15115
+        0.25030
+        0.27448
+        0.50744
+        0.58388
+        0.51086
+        0.52258
+        0.37094
+        0.27741
+        0.26813
+        0.26007
+        0.26520
+        0.26520
+        0.25811
+        air fat mucle bone theet enamel  346,1440,1585,2117,4200,5491
+        https://www.desmos.com/calculator/ytoinrnekt
+    */
+
+    </script>
+</body>
+
+</html>
