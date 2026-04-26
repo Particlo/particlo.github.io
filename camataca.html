@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/png" href="icon.png">
+<title>camataca</title>
+<meta charset="UTF-8">
+<style>
+</style>
+</head>
+<body>
+<script>
+// CSS
+const style = document.createElement("style");
+style.textContent = `
+  body { background-color:#111111; font-family:monospace; margin:0; }
+
+  .row {
+    display: grid;
+    grid-auto-flow: column;       /* place items in a single row */
+    grid-auto-columns: 100px;     /* each column is 100px */
+    gap: 10px;
+    margin: 10px;
+    overflow-x: auto;             /* scroll instead of wrapping */
+  }
+
+  .cell {
+    width:100px;
+    height:100px; /* match width for consistency */
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    color:#fff;
+    font-weight:bold;
+    background:#444;
+    position:relative;
+    overflow:hidden;
+    text-align:center;
+    border-radius: 8px;
+  }
+
+  .item video {
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    position:absolute;
+    top:0;
+    left:0;
+  }
+
+  .label {
+    position:relative;
+    z-index:1;
+    text-align:center;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    height:100%;
+    text-shadow: 0px 0px 4px rgba(0, 0, 0, 1);
+  }
+`;
+document.head.appendChild(style);
+
+{
+  // Create main container
+  const section = document.createElement("div");
+  section.style.display = "flex";
+  section.style.alignItems = "center";
+  section.style.gap = "20px";
+  section.style.padding = "10px";
+  section.style.background = "#333333";
+
+  // Create image (left side)
+  const img = document.createElement("img");
+  img.src = "camataca.png"; // replace with your image URL
+  img.style.width = "200px";
+  img.style.height = "200px";
+  img.style.objectFit = "cover";
+  img.style.borderRadius = "20px";
+
+  // Create text container (right side)
+  const textContainer = document.createElement("div");
+
+  // Big title (one line)
+  const title = document.createElement("h1");
+  title.textContent = "CAMATACA";
+  title.style.margin = "0";
+  title.style.fontSize = "30px";
+  title.style.color = "#FFFFFF";
+
+  // Small description (multiple lines)
+  const description = document.createElement("p");
+  description.textContent = "android app that lets you control everything about your camera";
+  description.style.marginTop = "10px";
+  description.style.fontSize = "18px";
+  description.style.color = "#FFFFFF";
+
+  //buttons
+  const btsection = document.createElement("div");
+  btsection.style.display = "flex";
+  btsection.style.alignItems = "center";
+  //btsection.style.justifyContent = "space-between"; // pushes buttons apart
+  btsection.style.gap = "20px";
+  //btsection.style.padding = "10px";
+  {
+    const download = document.createElement("button");
+    download.textContent = "install app using APK";
+    download.style.width = "220px";
+    download.style.height = "70px";
+    download.style.fontSize = "18px";
+    download.style.color = "#FFFFFF";
+    download.style.borderRadius = "10px";
+    download.style.border = "none";
+    download.style.cursor = "pointer";
+    // 3D effect styles
+    download.style.background = "linear-gradient(145deg, rgb(158, 205, 160), rgb(31 53 32))";
+    download.style.boxShadow = "0 6px #2e7031, 0 10px 20px rgba(0,0,0,0.2)";
+    download.style.transition = "all 0.1s ease-in-out";
+    // Press effect (when clicked)
+    download.addEventListener("mousedown", () => {
+      download.style.transform = "translateY(4px)";
+      download.style.boxShadow = "0 2px #2e7031, 0 5px 10px rgba(0,0,0,0.2)";
+    });
+    download.addEventListener("mouseup", () => {
+      download.style.transform = "translateY(0)";
+      download.style.boxShadow = "0 6px #2e7031, 0 10px 20px rgba(0,0,0,0.2)";
+    });
+    // Optional: reset if mouse leaves while pressed
+    download.addEventListener("mouseleave", () => {
+      download.style.transform = "translateY(0)";
+      download.style.boxShadow = "0 6px #2e7031, 0 10px 20px rgba(0,0,0,0.2)";
+    });
+
+    const gitlnk = document.createElement("button");
+    gitlnk.style.width  = "70px";
+    gitlnk.style.height = "70px";
+    gitlnk.style.backgroundImage = "url('github.png')";
+    gitlnk.style.backgroundSize = "cover";
+    gitlnk.style.backgroundPosition = "center";
+    gitlnk.style.borderRadius = "10px";
+    gitlnk.style.border = "none";
+    gitlnk.style.cursor = "pointer";
+    // 3D effect styles
+    gitlnk.style.boxShadow = "rgb(154 154 154) 0px 6px, rgba(0, 0, 0, 0.2) 0px 10px 20px";
+    gitlnk.style.transition = "all 0.1s ease-in-out";
+    // Press effect (when clicked)
+    gitlnk.addEventListener("mousedown", () => {
+      gitlnk.style.transform = "translateY(4px)";
+      gitlnk.style.boxShadow = "0 2px rgb(154 154 154), 0 5px 10px rgba(0,0,0,0.2)";
+    });
+    gitlnk.addEventListener("mouseup", () => {
+      gitlnk.style.transform = "translateY(0)";
+      gitlnk.style.boxShadow = "0 6px rgb(154 154 154), 0 10px 20px rgba(0,0,0,0.2)";
+    });
+    // Optional: reset if mouse leaves while pressed
+    gitlnk.addEventListener("mouseleave", () => {
+      gitlnk.style.transform = "translateY(0)";
+      gitlnk.style.boxShadow = "0 6px rgb(154 154 154), 0 10px 20px rgba(0,0,0,0.2)";
+    });
+
+    const linkdownload = document.createElement("a");
+    linkdownload.href = "https://github.com/Particlo/camataca/raw/refs/heads/main/camataca.apk";
+    //linkdownload.target = "_blank";
+
+    const linkgithub = document.createElement("a");
+    linkgithub.href = "https://github.com/Particlo/camataca";
+    //linkgithub.target = "_blank";
+
+    linkdownload.appendChild(download);
+    linkgithub.appendChild(gitlnk);
+
+    btsection.appendChild(linkdownload);
+    btsection.appendChild(linkgithub);
+  }
+
+  // Append elements
+  textContainer.appendChild(title);
+  textContainer.appendChild(description);
+  textContainer.appendChild(btsection);
+
+  section.appendChild(img);
+  section.appendChild(textContainer);
+
+  // Add to page
+  document.body.appendChild(section);
+}
+
+let rows = [
+  { 
+    name: "cameras", 
+    items: ["shows all avaliable devices", "RAW sensor format", "custom resolution", "custom frame rate", "custom white balance", "sensor settings", "lens settings", "custom flash", "many more settings"], 
+    urls: [
+      "simpcam.png",
+      "camsensor.jpeg",
+      "grid.png",
+      "fps.png",
+      "wb.png",
+      "camsensor.jpeg",
+      "lens.png",
+      "flash.png",
+      "non.png",
+    ]
+  },
+  { 
+    name: "microphones", 
+    items: ["shows all avaliable devices", "unprocessed or processed audio", "custom sample rate", "custom bit depth", "custom channel mask", "many more settings"], 
+    urls: [
+      "simpmic.png",
+      "gaus.png",
+      "samplerate.png",
+      "bitdepth.png",
+      "channelmask.png",
+      "non.png",
+    ]
+  },
+  { 
+    name: "color spaces", 
+    items: ["sRGB", "DisplayP3", "BT.2020"], 
+    urls: [
+      "srgb.webm",
+      "display_p3.webm",
+      "bt2020.webm",
+    ]
+  },
+  { 
+    name: "image transfer functions", 
+    items: ["Linear", "OETF", "HLG", "PQ"], 
+    urls: [
+      "linear.png",
+      "oetf.png",
+      "hlg.png",
+      "pq.png",
+    ]
+  },
+  { 
+    name: "image precision", 
+    items: ["8bit int", "10bit int", "16bit float"], 
+    urls: [
+      "8bitint.png",
+      "10bitint.png",
+      "16bitfloat.png",
+    ]
+  },
+  { 
+    name: "image formats", 
+    items: ["AVIF", "JXL", "DNG", "JPG", "PNG", "WEBP"], 
+    urls: [
+      "imgformat.png",
+      "imgformat.png",
+      "imgformat.png",
+      "imgformat.png",
+      "imgformat.png",
+      "imgformat.png",
+    ]
+  },
+  { 
+    name: "video formats", 
+    items: ["H264", "H265", "AV1", "DNG", "VP9", "VP8", "H263", "MPEG4"], 
+    urls: [
+      "vidformat.png",
+      "vidformat.png",
+      "vidformat.png",
+      "vidformat.png",
+      "vidformat.png",
+      "vidformat.png",
+      "vidformat.png",
+      "vidformat.png",
+    ]
+  },
+  { 
+    name: "audio formats", 
+    items: ["ACC", "FLAC", "OPUS", "AMR-NB", "AMR-WB"], 
+    urls: [
+      "audioformat.png",
+      "audioformat.png",
+      "audioformat.png",
+      "audioformat.png",
+      "audioformat.png",
+    ]
+  },
+  { 
+    name: "themes", 
+    items: [" ", " ", " ", " "], 
+    urls: [
+      "themesimple.png",
+      "themeaqua.png",
+      "themeearth.png",
+      "themeanimal.png",
+    ]
+  },
+];
+
+// container
+const grid = document.createElement("div");
+document.body.appendChild(grid);
+
+// build
+let rowid = 0;
+rows.forEach(r => {
+  const rowDiv = document.createElement("div");
+  rowDiv.className = "row";
+
+  const name = document.createElement("div");
+  name.className = "cell name";
+  name.textContent = r.name;
+  name.style.background = "hsl("+((rowid/rows.length*360)|0)+", 30%, 50%)";  rowid++;
+  rowDiv.appendChild(name);
+
+  r.items.forEach((item, i) => {
+    const cell = document.createElement("div");
+    cell.className = "cell item";
+
+    const url = r.urls[i];
+
+    if (url.match(/\.webm($|\?)/i)) {
+      const video = document.createElement("video");
+      video.src = url;
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      cell.appendChild(video);
+    } else {
+      cell.style.backgroundImage = `url(${url})`;
+      cell.style.backgroundSize = "cover";
+      cell.style.backgroundPosition = "center";
+    }
+
+    const label = document.createElement("div");
+    label.className = "label";
+    label.textContent = item;
+
+    cell.appendChild(label);
+    rowDiv.appendChild(cell);
+  });
+
+  grid.appendChild(rowDiv);
+});
+
+//screenshots
+{
+  //title
+  const title = document.createElement("h1");
+  title.textContent = "screenshots";
+  title.style.margin = "10px 0px 0px 10px";
+  title.style.fontSize = "20px";
+  title.style.color = "#FFFFFF";
+  document.body.appendChild(title);
+
+  const screenshots = document.createElement("div");
+  screenshots.style.display = "flex";
+  screenshots.style.alignItems = "center";
+  //screenshots.style.justifyContent = "space-between"; // pushes buttons apart
+  screenshots.style.gap = "10px";
+  screenshots.style.padding = "10px";
+  document.body.appendChild(screenshots);
+
+  const screenshot1 = document.createElement("img");
+  const screenshot2 = document.createElement("img");
+  screenshot1.style.width  = "300px";
+  screenshot1.style.height = "auto";
+  screenshot2.style.width  = "300px";
+  screenshot2.style.height = "auto";
+  screenshot1.src = "screenshot1.png";
+  screenshot2.src = "screenshot2.png";
+  screenshots.appendChild(screenshot1);
+  screenshots.appendChild(screenshot2);
+}
+
+const homelink = document.createElement("a");
+homelink.href = "https://particlo.org";
+document.body.appendChild(homelink);
+{
+  const download = document.createElement("button");
+  download.textContent = "back home";
+  download.style.margin = "0px 10px 140px 10px";
+  download.style.width = "120px";
+  download.style.height = "40px";
+  download.style.fontSize = "16px";
+  download.style.color = "#FFFFFF";
+  download.style.borderRadius = "10px";
+  download.style.border = "none";
+  download.style.cursor = "pointer";
+  // 3D effect styles
+  download.style.background = "linear-gradient(145deg, rgb(129, 132, 145), rgb(42, 45, 50))";
+  download.style.boxShadow = "rgb(37, 39, 41) 0px 6px, rgba(0, 0, 0, 0.2) 0px 10px 20px";
+  download.style.transition = "all 0.1s ease-in-out";
+  // Press effect (when clicked)
+  download.addEventListener("mousedown", () => {
+    download.style.transform = "translateY(4px)";
+    download.style.boxShadow = "0 2px rgb(37, 39, 41), 0 5px 10px rgba(0,0,0,0.2)";
+  });
+  download.addEventListener("mouseup", () => {
+    download.style.transform = "translateY(0)";
+    download.style.boxShadow = "0 6px rgb(37, 39, 41), 0 10px 20px rgba(0,0,0,0.2)";
+  });
+  // Optional: reset if mouse leaves while pressed
+  download.addEventListener("mouseleave", () => {
+    download.style.transform = "translateY(0)";
+    download.style.boxShadow = "0 6px rgb(37, 39, 41), 0 10px 20px rgba(0,0,0,0.2)";
+  });
+  homelink.appendChild(download);
+}
+
+
+</script>
+</body>
+</html>
